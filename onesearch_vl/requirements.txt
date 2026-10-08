@@ -1,0 +1,13 @@
+torch>=2.4
+transformers>=4.55
+qwen-vl-utils
+accelerate
+pandas
+pyarrow
+Pillow
+opencv-python-headless
+tqdm
+requests
+httpx
+numpy
+decord
