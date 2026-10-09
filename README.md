@@ -19,6 +19,8 @@
 
 </div>
 
+> **Research fork:** This branch adds a Pixi CPU runtime and auditable audio-video data/search infrastructure. See [AV-DeepResearch research guide](docs/research/README.md) for verified scope, commands and remaining research gates. The upstream OneSearch-VL description and attribution below are preserved.
+
 ## 📑 Table of Contents
 
 - [📖 Introduction](#introduction)

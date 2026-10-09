@@ -1,0 +1,44 @@
+[workspace]
+name = "onesearch-vl-research"
+version = "0.1.0"
+description = "Pinned OneSearch-VL inference and AV research runtime on the user-selected Coder workspace"
+channels = ["conda-forge"]
+platforms = ["linux-64"]
+
+[dependencies]
+python = "3.11.*"
+ffmpeg = "*"
+ripgrep = "*"
+
+[pypi-options]
+index-url = "https://pypi.org/simple"
+extra-index-urls = ["https://download.pytorch.org/whl/cpu"]
+
+[pypi-dependencies]
+torch = "==2.8.0+cpu"
+torchvision = "==0.23.0+cpu"
+transformers = "==5.2.0"
+qwen-vl-utils = "*"
+accelerate = "*"
+pandas = "*"
+pyarrow = "*"
+pillow = "*"
+opencv-python-headless = "*"
+tqdm = "*"
+requests = "*"
+httpx = "*"
+numpy = "*"
+decord = "==0.6.0"
+huggingface-hub = "*"
+
+[tasks]
+infer = "python onesearch_vl/run_infer.py"
+prepare-video = "python onesearch_vl/prepare_video.py"
+minimal = "python -u repro/minimal_inference.py"
+validate-retrieval = "python -m unittest discover -s validation -p test_offline_retrieval.py -v"
+
+validate-research = "python -m unittest discover -s validation/research -p \"test_*.py\" -v"
+av-prepare-pilot = "python -m research.av_data.prepare_pilot"
+av-replay = "python -m research.av_agent.cli"
+av-pilot-smoke = "python -m research.av_agent.run_pilot"
+av-review-forms = "python -m research.av_data.review_forms"

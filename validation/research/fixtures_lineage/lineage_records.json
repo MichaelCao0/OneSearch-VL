@@ -1,0 +1,95 @@
+{
+  "schema_version": "1.0",
+  "created_by": "phase1-test-fixture",
+  "revision": "fixture-v1",
+  "records": [
+    {
+      "source_id": "src_11111111111111111111111111111111",
+      "recording_id": "rec_A",
+      "event_id": "evt_A",
+      "media_type": "av",
+      "record_role": "event_evidence",
+      "stage": "exploration",
+      "asset_sha256": "7f19cf7b6252c09513e10266ec0aa0c4ddfb23641ca9eeedd3528bc39ca45dda",
+      "fixture_asset": "synthetic_original.wav"
+    },
+    {
+      "source_id": "src_22222222222222222222222222222222",
+      "recording_id": "rec_A",
+      "event_id": "evt_A",
+      "media_type": "av",
+      "record_role": "event_evidence",
+      "lineage_links": [
+        {
+          "source_id": "src_11111111111111111111111111111111",
+          "relation_type": "recording",
+          "relation_status": "same"
+        }
+      ],
+      "asset_sha256": "20811861f4fbad12adf8951eee2497e9f912090ff696a6d87de54b9fb2343fec",
+      "fixture_asset": "synthetic_crop.wav"
+    },
+    {
+      "source_id": "src_33333333333333333333333333333333",
+      "recording_id": "rec_B",
+      "event_id": "evt_A",
+      "media_type": "av",
+      "record_role": "event_evidence"
+    },
+    {
+      "source_id": "src_44444444444444444444444444444444",
+      "recording_id": "rec_C",
+      "event_id": "evt_B",
+      "media_type": "av",
+      "record_role": "event_evidence",
+      "near_duplicate_ids": [
+        "src_55555555555555555555555555555555"
+      ]
+    },
+    {
+      "source_id": "src_55555555555555555555555555555555",
+      "recording_id": "rec_D",
+      "event_id": "evt_C",
+      "media_type": "av",
+      "record_role": "event_evidence"
+    },
+    {
+      "source_id": "src_66666666666666666666666666666666",
+      "recording_id": "rec_E",
+      "event_id": "evt_D",
+      "media_type": "av",
+      "record_role": "event_evidence"
+    },
+    {
+      "source_id": "src_77777777777777777777777777777777",
+      "recording_id": "rec_F",
+      "event_id": "evt_E",
+      "media_type": "av",
+      "record_role": "event_evidence",
+      "origin_url": "https://example.test/uploader/channel",
+      "uploader_id": "shared-uploader"
+    },
+    {
+      "source_id": "src_88888888888888888888888888888888",
+      "recording_id": "rec_G",
+      "event_id": "evt_F",
+      "media_type": "av",
+      "record_role": "event_evidence",
+      "origin_url": "https://example.test/uploader/channel",
+      "uploader_id": "shared-uploader"
+    },
+    {
+      "source_id": "src_99999999999999999999999999999999",
+      "media_type": "webpage",
+      "record_role": "shared_knowledge",
+      "event_id": "evt_A",
+      "lineage_links": [
+        {
+          "source_id": "src_66666666666666666666666666666666",
+          "relation_type": "shared_knowledge",
+          "relation_status": "same"
+        }
+      ]
+    }
+  ]
+}

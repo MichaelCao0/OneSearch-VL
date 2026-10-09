@@ -18,7 +18,7 @@ from . import cos_upload
 from . import image_io
 from . import search
 from . import video_io
-from .prompts import get_tool_specs, tool_names
+from .prompts import get_tool_specs, tool_names, retrieval_disabled, is_retrieval_tool
 from .image_engines import ImageEnhancementEngine, ImageToolEngine
 
 
@@ -455,6 +455,11 @@ def execute_tool(
         return f"Tool execution error:\nInvalid tool call payload: {exc}", {}
 
     name = call.get("name", "")
+    if retrieval_disabled() and is_retrieval_tool(name):
+        return (
+            f"Tool execution error:\nRetrieval disabled (ONESEARCH_DISABLE_RETRIEVAL=1): {name}.",
+            {},
+        )
     params = call.get("parameters", {}) or {}
 
     if name == "visit_webpage":

@@ -27,3 +27,20 @@ RL/rllm/vision_deepresearch_async_workflow/data_prepare/data/
 
 # Keep local test suites out of the published release at every depth.
 tests/
+
+# Research runtime; keep manifests and lockfiles tracked.
+.pixi/
+repro/assets/
+repro/logs/
+repro/results/
+validation/logs/
+
+research/assets/
+
+research/runs/
+
+research/cache/
+
+research/private/
+
+.superpowers/

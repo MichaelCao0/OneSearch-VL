@@ -1,0 +1,212 @@
+{
+  "checked_at_utc": "2026-10-09T09:27:43Z",
+  "scope": "closed-response image/video integration smoke, not benchmark reproduction",
+  "passed": true,
+  "run": {
+    "scope": "published 8B + native image/video agent + real local tools; retrieval disabled; custom questions; no benchmark score",
+    "git_baseline": "0b7b01ed4872aaccd9af0f6f3d23a81814cf55bd",
+    "model_revision": "2623603767b9fef7bab05ad0c3cd4d464301e8df",
+    "weight_sha256": "f73186b544f7ff267d1150cc5ef3340edbf196d21b46794e4a623734304c8c5b",
+    "dataset_revision": "8694a570d777066e053fc258623a429cc13a2294",
+    "one_search_disable_retrieval": true,
+    "device": "cpu",
+    "dtype": "torch.bfloat16",
+    "model_config_use_cache": false,
+    "torch_threads": 16,
+    "video_transport": "local path to unchanged released MP4; PNGs and local tools via loopback HTTP",
+    "video_max_frames": 4,
+    "video_max_pixels": 50176,
+    "single_max_tokens_per_turn": 256,
+    "video_max_tokens_per_turn": 256,
+    "max_turns": 3,
+    "load_seconds": 4.616632699966431,
+    "single_seconds": 35.05864240601659,
+    "video_seconds": 110.99395047873259,
+    "single_status": "ok",
+    "video_status": "ok",
+    "single_final": "<response>red square</response>",
+    "video_final": "<response>THANKS FOR WATCHING</response>",
+    "output_dir": "/home/jovyan/OneSearch-VL/repro/results/minimal-20261009-091814"
+  },
+  "native_agent_checks": {
+    "image": {
+      "complete": true,
+      "final": "<response>red square</response>",
+      "turn_count": 1,
+      "tool_calls": [],
+      "usage": [
+        {
+          "promptTokenCount": 1233,
+          "candidatesTokenCount": 60,
+          "totalTokenCount": 1293
+        }
+      ],
+      "trajectory": "/home/jovyan/OneSearch-VL/repro/results/minimal-20261009-091814/single-image/synthetic-red-square_trajectory.json",
+      "trajectory_sha256": "7aa257eaf748504380363633b063ed70ba69947347564fb1738ebd33a4faef1d",
+      "tool_error_count": 0
+    },
+    "video": {
+      "complete": true,
+      "final": "<response>THANKS FOR WATCHING</response>",
+      "turn_count": 2,
+      "tool_calls": [
+        {
+          "turn": 0,
+          "call": {
+            "name": "select_frame",
+            "arguments": {
+              "video": "video_1",
+              "frame_index": 127
+            }
+          },
+          "observation": "<observation>\nselect_frame succeeded. New image handle: img_1 (frame_index=127/127 from 'video_1').\n</observation>",
+          "raw_tool_call": "{\"name\":\"select_frame\",\"name\":\"select_frame\",\"arguments\":{\"video\":\"video_1\",\"frame_index\":127}}"
+        }
+      ],
+      "usage": [
+        {
+          "promptTokenCount": 1496,
+          "candidatesTokenCount": 91,
+          "totalTokenCount": 1587
+        },
+        {
+          "promptTokenCount": 1866,
+          "candidatesTokenCount": 68,
+          "totalTokenCount": 1934
+        }
+      ],
+      "trajectory": "/home/jovyan/OneSearch-VL/repro/results/minimal-20261009-091814/video/published-video-local-inspection_trajectory.json",
+      "trajectory_sha256": "551b55ee2bcf54ba2706035b8e331afbc3d99e87e203090d9b3574c946b2b966",
+      "tool_error_count": 0,
+      "format_observations": [
+        "Duplicate same-valued name key accepted by Python parser; not a tool execution error."
+      ]
+    }
+  },
+  "manual_tools": [
+    {
+      "call": {
+        "name": "select_frame",
+        "parameters": {
+          "video": "video_1",
+          "frame_index": 0
+        }
+      },
+      "observation": "select_frame succeeded. New image handle: img_1 (frame_index=0/127 from 'video_1').",
+      "new_handles": [
+        "img_1"
+      ]
+    },
+    {
+      "call": {
+        "name": "select_timespan",
+        "parameters": {
+          "video": "video_1",
+          "start_index": 0,
+          "end_index": 4
+        }
+      },
+      "observation": "select_timespan succeeded. New clip handle: clip_1 (frames=[0, 4) of 'video_1'; this clip is now shown to you as 4 frames indexed 0..3).",
+      "new_handles": [
+        "clip_1"
+      ]
+    },
+    {
+      "call": {
+        "name": "crop",
+        "parameters": {
+          "image": "img_1",
+          "x": 0,
+          "y": 0,
+          "width": 128,
+          "height": 128
+        }
+      },
+      "observation": "Image cropped successfully. New image ID: img_2.",
+      "new_handles": [
+        "img_2"
+      ]
+    }
+  ],
+  "checks": {
+    "pixi_locked_install": true,
+    "retrieval_regression_tests": 7,
+    "official_subset_verify": {
+      "samples": 1,
+      "videos": 1,
+      "frames": 128,
+      "verified": true
+    },
+    "git_diff_check": true,
+    "python_syntax_check": true
+  },
+  "source_hashes_capture_phase": "postrun review; source snapshot not claimed for older attempts",
+  "source_hashes": {
+    ".gitignore": "1e5dea4db059e541ef9c9e758aa329b8474617aa5534d7cb68bbfb32869296bc",
+    "AGENTS.md": "7287d4481872d8120986f9754ec79a07732c1a38c58d6ff7e44855e995d28675",
+    "pixi.toml": "2e972d465af4cc96cd715608708e9e8c055c3a230521a5d8607ccb456787305e",
+    "pixi.lock": "61086af140150b93060cd9677823a781877c32e5a355a295c32b2d73e4b4fac6",
+    "onesearch_vl/onesearch_infer/prompts/__init__.py": "cbed597b95e0e62b0db0cc24a67c6dd1196a0abfb0f5e57da0beb69ced3bda4d",
+    "onesearch_vl/onesearch_infer/tools.py": "c809d92059e7c0605749163358196534f697a6f9ebd1074c57cd65ece43cc50d",
+    "repro/minimal_inference.py": "28a218a1e61bfa481d0bcd99d648574b99adbb11b57f62902abe77d640b6160a",
+    "repro/download_model.py": "6554fec243ab05ec076a2fe0689c4fdc5509e38ab1bbb87f2900e5eb8bb22a52",
+    "repro/prepare_video_subset.py": "0bc0e17727a6a3a9ee629d6a8e88f2f32d38854b4042d4bfff23920bcf962a54",
+    "validation/test_offline_retrieval.py": "67a220dd17830016ce122a164d3a2099e84c962425287ac1a960f95f5f4ddfe8"
+  },
+  "weight_receipt": {
+    "repo": "OneSearch-VL/OneSearch-VL-8B",
+    "revision": "2623603767b9fef7bab05ad0c3cd4d464301e8df",
+    "bytes": 17534340584,
+    "sha256": "f73186b544f7ff267d1150cc5ef3340edbf196d21b46794e4a623734304c8c5b",
+    "expected_lfs_sha256": "f73186b544f7ff267d1150cc5ef3340edbf196d21b46794e4a623734304c8c5b",
+    "verified": true,
+    "protocol": "64MiB strict HTTP ranges to local scratch; source hash and persistent readback hash"
+  },
+  "dataset_receipt": {
+    "revision": "8694a570d777066e053fc258623a429cc13a2294",
+    "subset_ids": [
+      "0"
+    ],
+    "samples": 1,
+    "videos": 1,
+    "files": 129,
+    "range_download_bytes": 252383186,
+    "protocol": "filtered original metadata; original MP4/PNG bytes; ZIP CRC checked; full dataset not evaluated"
+  },
+  "gpu_devices": [],
+  "failure_attempts": [
+    {
+      "dir": "minimal-20261009-084409",
+      "reason": "loopback HTTP MP4 decoding failed"
+    },
+    {
+      "dir": "minimal-20261009-085530",
+      "reason": "96-token video response truncated; incomplete"
+    },
+    {
+      "dir": "minimal-20261009-085814",
+      "reason": "completed answer but external layout_parsing unconfigured; error recovery"
+    },
+    {
+      "dir": "minimal-20261009-091215",
+      "reason": "image 96-token tool JSON truncated; repaired but strict gate rejected"
+    }
+  ],
+  "synthesis_release_audit": {
+    "upstream_head": "0b7b01ed4872aaccd9af0f6f3d23a81814cf55bd",
+    "upstream_tree_truncated": false,
+    "complete_synthesis_pipeline_found": false,
+    "published_support_scripts": [
+      "SFT/scripts/relocate_media.py",
+      "RL/rllm/vision_deepresearch_async_workflow/data_prepare/register_rl_dataset.py",
+      "RL/register_dataset.py"
+    ],
+    "paper_appendix_A": "prompt templates are omitted",
+    "sft_revision": "64c9da7f2af3362f26f497ad28f13ca834797b37",
+    "rl_revision": "1e0c8334a1604d8cc8e0edabf34c15c94d2899e2",
+    "rl_card_old_code_url_status": 404
+  },
+  "git_branch": "research/av-deepresearch",
+  "git_working_tree_diff_sha256": "328849b1b60d8d3feae930b48bc300f4d94bc9652508cf8fadc2476114c8ccd7",
+  "public_push_performed": false
+}
