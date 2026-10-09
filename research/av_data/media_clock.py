@@ -17,6 +17,9 @@ from datetime import datetime, timezone
 from fractions import Fraction
 from pathlib import Path
 from typing import Any
+from time import perf_counter
+
+from .media_cost import instrument_media_args, record_media_operation
 
 from .schemas import DERIVED_SCHEMA_VERSION, TOOL_REVISION
 
@@ -34,15 +37,29 @@ def sha256_file(path: str | Path) -> str:
 
 
 def run_media(args: list[str]) -> bytes:
-    """Execute argument arrays only; bounded failures expose no environment data."""
+    """Execute argument arrays and account successes and unknown failed work."""
+    stdout, stderr = b"", b""
+    status, returncode, failure_kind = "failed", None, None
+    started = perf_counter()
     try:
-        result = subprocess.run(args, check=True, stdout=subprocess.PIPE,
+        result = subprocess.run(instrument_media_args(args), check=True, stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE, timeout=300)
+        stdout, stderr = result.stdout, result.stderr
+        status, returncode = "success", result.returncode
     except (OSError, subprocess.SubprocessError) as exc:
-        message = getattr(exc, "stderr", b"")
-        detail = message.decode("utf-8", errors="replace")[-2000:] if isinstance(message, bytes) else str(message)
+        stdout = getattr(exc, "stdout", None) or getattr(exc, "output", None) or b""
+        stderr = getattr(exc, "stderr", None) or b""
+        returncode = getattr(exc, "returncode", None)
+        failure_kind = ("timeout" if isinstance(exc, subprocess.TimeoutExpired) else
+                        "nonzero_exit" if isinstance(exc, subprocess.CalledProcessError) else
+                        "os_error")
+        detail = stderr.decode("utf-8", errors="replace")[-2000:] if isinstance(stderr, bytes) else str(stderr)
         raise ValueError(f"Media tool failed: {args[0]}: {detail or type(exc).__name__}") from exc
-    return result.stdout
+    finally:
+        record_media_operation(args, stdout=stdout, stderr=stderr,
+                               wall_seconds=perf_counter()-started, status=status,
+                               returncode=returncode, failure_kind=failure_kind)
+    return stdout
 
 
 def tool_version(tool: str) -> str:

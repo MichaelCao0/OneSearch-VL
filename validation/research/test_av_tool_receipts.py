@@ -128,6 +128,31 @@ class AVToolsTests(unittest.TestCase):
         header=json.loads((self.root/'episode'/'episode.json').read_text())
         self.assertEqual(header['manifest_sha256'],media['manifest_sha256'])
 
+    def test_operation_cost_includes_repeated_scans_and_differs_from_prepared_input(self):
+        receipt=self.action('inspect_av',source_id=self.sid,start_s=0,end_s=.5)
+        self.assertIn('media_work',receipt['actual_cost'])
+        work=receipt['actual_cost']['media_work']
+        self.assertGreater(work['operation_count'],1)
+        self.assertGreater(work['observed_ffprobe_audio_samples'],receipt['actual_cost']['decoded_audio_samples'])
+        self.assertGreater(work['observed_ffprobe_video_frames'],receipt['actual_cost']['returned_video_frames'])
+        self.assertFalse(work['full_decode_work_accounting_ready'])
+        self.assertNotIn(str(self.root),json.dumps(work))
+        self.assertGreater(self.tools.costs['media_subprocess_count'],1)
+        header=json.loads((self.root/'episode'/'episode.json').read_text())
+        self.assertIn('preflight_media_work',header)
+        self.assertGreater(header['preflight_media_work']['operation_count'],0)
+        self.assertGreater(self.tools.costs['observed_ffmpeg_input_audio_samples'],receipt['actual_cost']['decoded_audio_samples'])
+        self.assertEqual(self.tools.costs['media_subprocess_count'],
+                         work['operation_count']+header['preflight_media_work']['operation_count'])
+
+    def test_failed_tool_preserves_operation_ledger_and_requested_budget(self):
+        Path(self.source['asset_path']).write_bytes(b'tamper')
+        receipt=self.action('inspect_av',source_id=self.sid,start_s=0,end_s=.5)
+        self.assertEqual(receipt['status'],'tool_failed')
+        self.assertIn('media_work',receipt['actual_cost'])
+        self.assertEqual(receipt['logical_cost']['requested_av_seconds'],.5)
+        self.assertEqual(self.tools.costs['failures'],1)
+
     def test_run_output_cannot_be_overwritten(self):
         with self.assertRaises(FileExistsError):EpisodeTools(self.index,{self.sid:self.source},self.scope,self.root/'episode')
 

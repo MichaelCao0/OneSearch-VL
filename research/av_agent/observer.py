@@ -11,6 +11,7 @@ CAPABILITIES = {
     'model_revision': None,
     'semantic_probe_count': 0,
     'full_decode_work_accounting_ready': False,
+    'media_subprocess_ledger_ready': True,
 }
 
 
@@ -26,6 +27,7 @@ def prepare_av_input(source, start_s, end_s, output_dir):
         'returned_video_pixels': sum(int(streams[f['stream_index']].get('width', 0)) * int(streams[f['stream_index']].get('height', 0)) for f in video),
         'output_bytes': derived['output_bytes'],
         'count_scope': 'prepared_clip_only',
-        'full_source_decode_work': 'not_measured',
+        'full_source_decode_work': 'partially_measured_see_media_work',
+        'sample_count_interpretation': 'decoded_audio_samples counts prepared clip samples only',
     }
     return derived, counts

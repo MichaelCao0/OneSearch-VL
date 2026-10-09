@@ -42,3 +42,17 @@ def inspect_av(source, start_s, end_s, output_dir):
         'actual_cost': counts,
     }
     return public, derived
+
+
+def read_text(index_dir, source_id, start_char, end_char, scope):
+    """Return exact text from the pinned public snapshot; never a model summary."""
+    doc = get_source(index_dir, source_id, scope)
+    if (any(isinstance(x,bool) or not isinstance(x,int) for x in (start_char,end_char)) or
+            not 0 <= start_char < end_char <= len(doc['text']) or end_char-start_char > 4000):
+        raise ValueError('Text quote requires 1..4000 chars inside frozen content')
+    return {'status':'ok','source_id':source_id,'origin_url':doc['origin_url'],
+            'asset_sha256':doc['asset_sha256'],'text_sha256':doc['text_sha256'],
+            'text_kind':doc['text_kind'],
+            'quote':{'start_char':start_char,'end_char':end_char,'text':doc['text'][start_char:end_char]},
+            'interpretation':'frozen_source_text_not_semantic_verification',
+            'logical_cost':{'returned_chars':end_char-start_char}}
