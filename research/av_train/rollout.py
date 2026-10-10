@@ -29,6 +29,12 @@ class ToolRuntime:
         self.output_dir.mkdir(parents=True,exist_ok=False)
         self.budget=budget;self.observer=observer
         self.cost={'tool_calls':0,'requested_av_seconds':0.}
+    def tool_definitions(self):
+        definitions=json_copy(TOOL_DEFINITIONS)
+        limit=getattr(self.observer,'max_clip_seconds',None)
+        if limit is not None:
+            next(t for t in definitions if t['name']=='inspect_av')['constraints']={'max_window_seconds':limit}
+        return definitions
     def execute(self,action):
         tool=action['tool'];a=action['arguments'];expected={
           'search_sources':{'query','top_k'},'read_text':{'source_id','start_char','end_char'},
@@ -90,7 +96,8 @@ class OpenAIController:
 
 def run_episode(task,runtime,controller,teacher):
     validate_task(task,{'corpus_id':task['corpus_id'],'split':task['split'],'source_ids':runtime.source_ids})
-    history=[{'role':'system','content':SYSTEM+'\nTools: '+json.dumps(TOOL_DEFINITIONS,ensure_ascii=False,allow_nan=False)},
+    tools=runtime.tool_definitions() if hasattr(runtime,'tool_definitions') else json_copy(TOOL_DEFINITIONS)
+    history=[{'role':'system','content':SYSTEM+'\nTools: '+json.dumps(tools,ensure_ascii=False,allow_nan=False)},
              {'role':'user','content':json.dumps(task,ensure_ascii=False)}]
     steps=[];final={'status':'tool_budget_exhausted'}
     for _ in range(task['budget_recipe']['max_tool_calls']+1):
@@ -113,16 +120,56 @@ def run_episode(task,runtime,controller,teacher):
     final['cost']=json_copy(runtime.cost)
     if hasattr(controller,'total_tokens'):final['cost']['controller_tokens']=controller.total_tokens
     trace={'schema_version':'av-research-trajectory.v1','task':json_copy(task),'teacher':json_copy(teacher),
-           'system':SYSTEM,'tools':TOOL_DEFINITIONS,'steps':steps,'final':final,'execution_kind':'live_tools',
+           'system':SYSTEM,'tools':tools,'steps':steps,'final':final,'execution_kind':'live_tools',
            'referenced_source_ids':[]}
     trace['referenced_source_ids']=sorted(source_ids(trace))
     return trace
 
 
+def make_parser():
+    p=argparse.ArgumentParser(description=__doc__)
+    p.add_argument('--batch-dir',required=True);p.add_argument('--out-dir',required=True)
+    p.add_argument('--task-id');p.add_argument('--teacher-model');p.add_argument('--teacher-revision')
+    p.add_argument('--fixture-smoke',action='store_true')
+    p.add_argument('--observer-mode',choices=['unavailable','native','recorded'],default='unavailable')
+    p.add_argument('--observer-model-manifest');p.add_argument('--observer-code-revision')
+    p.add_argument('--observer-runtime-manifest');p.add_argument('--observer-runtime-lock')
+    p.add_argument('--observer-device',default='cuda:0')
+    p.add_argument('--observer-execution-dir',action='append',default=[])
+    p.add_argument('--observer-backend-identity')
+    return p
+
+
+def build_observer(args,out_dir):
+    native_fields=(args.observer_model_manifest,args.observer_code_revision,
+                   args.observer_runtime_manifest,args.observer_runtime_lock)
+    recorded_fields=(args.observer_execution_dir,args.observer_backend_identity)
+    if args.observer_mode=='unavailable':
+        if any(native_fields) or any(recorded_fields):raise ValueError('Observer unavailable mode cannot ignore explicit configuration')
+        return None
+    if args.observer_mode=='recorded':
+        if any(native_fields) or not args.observer_execution_dir or not args.observer_backend_identity:
+            raise ValueError('Independent observer records and expected identity required; native fields are not accepted')
+        from .native_observer import RecordedObserverReplay
+        expected=json.loads(Path(args.observer_backend_identity).read_text())
+        return RecordedObserverReplay(args.observer_execution_dir,expected_backend=expected)
+    if not all(native_fields) or any(recorded_fields):
+        raise ValueError('Explicit native observer model, code revision, runtime manifest and lock required')
+    from research.scripts.run_av_observer_smoke import collect_runtime_receipt
+    from research.av_data.build_research_batch import write_json
+    receipt=collect_runtime_receipt(args.observer_runtime_manifest,args.observer_runtime_lock)
+    write_json(Path(out_dir)/'observer-runtime.private.json',receipt)
+    if receipt['status']!='verified':raise ValueError('Native observer runtime mismatch before model load')
+    from research.av_agent.qwen_omni_backend import QwenOmniBackend
+    from research.av_agent.semantic_observer import SemanticObserver
+    from .native_observer import NativeObserverAdapter
+    backend=QwenOmniBackend(args.observer_model_manifest,backend_code_revision=args.observer_code_revision,
+        device=args.observer_device,max_clip_seconds=2.,clock_policy='av_pts_grid_v1',output_policy='json_object_v1')
+    return NativeObserverAdapter(SemanticObserver(backend),max_clip_seconds=2.,backend=backend)
+
+
 def main():
-    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--batch-dir',required=True);p.add_argument('--out-dir',required=True)
-    p.add_argument('--task-id');p.add_argument('--teacher-model');p.add_argument('--teacher-revision');p.add_argument('--fixture-smoke',action='store_true')
-    a=p.parse_args();batch=Path(a.batch_dir);out=Path(a.out_dir)
+    a=make_parser().parse_args();batch=Path(a.batch_dir);out=Path(a.out_dir)
     if out.exists():raise FileExistsError(out)
     tasks=[json.loads(l) for l in (batch/'tasks-public.jsonl').read_text().splitlines() if l]
     task=next(t for t in tasks if a.task_id is None or t['task_id']==a.task_id)
@@ -141,12 +188,13 @@ def main():
     else:
         if not a.teacher_model or not a.teacher_revision:raise ValueError('Explicit teacher model/revision required')
         controller=OpenAIController(a.teacher_model);teacher={'kind':'model','model':a.teacher_model,'revision':a.teacher_revision}
-    runtime=ToolRuntime(batch/'corpus',scope,sources,out/'tools',task['budget_recipe'])
+    observer=build_observer(a,out)
+    runtime=ToolRuntime(batch/'corpus',scope,sources,out/'tools',task['budget_recipe'],observer=observer)
     trace=run_episode(task,runtime,controller,teacher)
     from research.av_data.build_research_batch import write_json
     write_json(out/'trace.private.json',trace)
     write_json(out/'summary.json',{'status':trace['final']['status'],'executed_tool_calls':len(trace['steps']),
-        'teacher_kind':teacher['kind'],'retained_sft_rows':0,'semantic_observer_configured':False,
+        'teacher_kind':teacher['kind'],'retained_sft_rows':0,'semantic_observer_configured':observer is not None,'observer_mode':a.observer_mode,
         'training_ready':False,'scope':scope['split']})
     print(json.dumps(json.loads((out/'summary.json').read_text()),ensure_ascii=False,indent=2))
 if __name__=='__main__':main()

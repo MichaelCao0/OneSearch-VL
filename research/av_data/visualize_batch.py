@@ -20,22 +20,24 @@ LABELS={'source_discovery':'来源发现','event_localization':'事件实例定�
 def esc(value):return html.escape(str(value),quote=True)
 
 
+def source_card(source,initial=False):
+    sid=source['source_id'];title=source['title']
+    card=f'<article class="source"><div class="source-head"><b>{esc(title)}</b><span>{"起始素材" if initial else "待审候选"}</span></div>'
+    if source.get('contact_sheet'):
+        card+=f'<img loading="lazy" src="{esc(source["contact_sheet"])}" alt="{esc(title)}：三张原始时间轴抽帧">'
+    if source.get('playback_url'):
+        card+=f'<video controls preload="none" src="{esc(source["playback_url"])}"></video>'
+    if source.get('body_text'):
+        card+='<details><summary>冻结说明页正文（前 1500 字符）</summary><p>'+esc(source['body_text'][:1500])+'</p></details>'
+    card+=f'<div class="provenance">{source.get("duration_s",0):.2f}s · <code>{esc(sid)}</code><br>{esc(source.get("rights_basis","unknown"))}</div>'
+    card+=f'<a href="{esc(source["origin_url"])}" target="_blank" rel="noopener">打开原片与授权说明 ↗</a></article>'
+    return card
+
+
 def case_html(row,source_views):
     t=row['task'];tid=t['task_id'];family=row['family']
     targets=''.join('<li>'+esc(q['question'])+'</li>' for q in t['target_questions'])
-    source_cards=[]
-    for source in source_views:
-        sid=source['source_id'];title=source['title'];initial=sid in t['initial_sources']
-        card=f'<article class="source"><div class="source-head"><b>{esc(title)}</b><span>{"起始素材" if initial else "待审候选"}</span></div>'
-        if source.get('contact_sheet'):
-            card+=f'<img loading="lazy" src="{esc(source["contact_sheet"])}" alt="{esc(title)}：三张原始时间轴抽帧">'
-        if source.get('playback_url'):
-            card+=f'<video controls preload="none" src="{esc(source["playback_url"])}"></video>'
-        if source.get('body_text'):
-            card+='<details><summary>冻结说明页正文（前 1500 字符）</summary><p>'+esc(source['body_text'][:1500])+'</p></details>'
-        card+=f'<div class="provenance">{source.get("duration_s",0):.2f}s · <code>{esc(sid)}</code><br>{esc(source.get("rights_basis","unknown"))}</div>'
-        card+=f'<a href="{esc(source["origin_url"])}" target="_blank" rel="noopener">打开原片与授权说明 ↗</a></article>'
-        source_cards.append(card)
+    source_cards=[source_card(source,source['source_id'] in t['initial_sources']) for source in source_views]
     return f'''<section class="case" data-family="{esc(family)}" id="{esc(tid)}">
       <div class="case-label">{esc(tid)} · {esc(LABELS[family])} · {esc(row['domain'])}</div>
       <h2>{esc(t['question'])}</h2><ol>{targets}</ol>
@@ -138,6 +140,16 @@ document.querySelector('#export').onclick=()=>{const payload={schema_version:'av
         page=page.replace('avrb-review-20261010-v0','avrb-train-review-20261010-v0')
         page=page.replace('所有模型搜索同一共享 corpus；下面展示的候选仅供作者审查，不提供给 actor。AV 派生描述索引尚未建成。',
                           '这是训练候选作者页；source-family 审查和必要事实完成后才输出 actor tasks。Teacher 不读取参考答案。')
+    # Show the shared AV corpus, including natural candidates not assigned to a task.
+    # These authoring cards are never sent to the actor as a shortlist.
+    av_views=[view for sid,view in views.items() if sources[sid]['media_type']=='audio_video']
+    gallery='<details class="corpus"><summary>查看共享语料：'+str(len(av_views))+' 份音视频与 '+str(sum(r['media_type']=='webpage' for r in sources.values()))+' 份说明页</summary><p>所有任务使用同一检索语料。这里展示全部原片，包括尚未归入任务组的潜在干扰素材；用途和独立录制关系仍待审核。</p><div class="grid">'+''.join(source_card(view) for view in av_views)+'</div></details>'
+    page=page.replace('<nav class="bar">',gallery+'<nav class="bar">')
+    review_id=hashlib.sha256(json.dumps({'task_ids':[r['task']['task_id'] for r in rows],
+                                      'source_ids':sorted(sources)},sort_keys=True).encode()).hexdigest()[:16]
+    page=page.replace("const storeKey='avrb-review-20261010-v0'","const storeKey='avrb-review-"+review_id+"'")
+    page=page.replace("const storeKey='avrb-train-review-20261010-v0'","const storeKey='avrb-train-review-"+review_id+"'")
+    page=page.replace('AV-ResearchBench-review-notes.json','AV-train-cases-review-notes.json' if is_train else 'AV-ResearchBench-review-notes.json')
     (out/'review.html').write_text(page,encoding='utf-8')
     write_json(out/'thumbnail-provenance.json',frame_receipts)
     write_json(out/'batch-summary.json',summary)
