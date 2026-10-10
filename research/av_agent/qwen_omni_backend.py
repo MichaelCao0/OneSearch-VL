@@ -15,10 +15,20 @@ import re
 import time
 
 from research.av_agent.semantic_observer import (
-    _finite, _structured_errors, validate_backend_identity, validate_observer_input,
+    _finite, _structured_errors, _digest, validate_backend_identity, validate_observer_input,
 )
 from research.av_data.media_clock import sha256_file
 from research.av_agent.native_clock_gate import check_native_clip_clocks
+
+def prepare_pts_audio(bound_input):
+    # Keep optional native decoding dependencies lazy for default CPU contracts.
+    from research.av_agent.audio_pts_adapter import decode_audio_on_clip_axis
+    return decode_audio_on_clip_axis(bound_input, target_sample_rate=16000)
+
+
+def prepare_pts_video(bound_input, *, sample_fps, max_pixels):
+    from research.av_agent.video_pts_sampler import prepare_video_on_clip_grid
+    return prepare_video_on_clip_grid(bound_input,sample_fps=sample_fps,max_pixels=max_pixels)
 
 MODEL_ID = 'Qwen/Qwen2.5-Omni-7B'
 _HASH = re.compile(r'^[0-9a-f]{64}$')
@@ -48,7 +58,7 @@ def _abstention(issue):
             'cannot_determine': ['observer_parse_issue:' + issue]}, issue
 
 
-def parse_clip_observation(raw_output, bound_input):
+def parse_clip_observation(raw_output, bound_input, *, audio_coverage_receipt=None):
     """Strictly parse relative clip intervals, then map to source presentation.
 
     The model sees a zero-based clip, not source offsets. No clamping/repair is
@@ -81,6 +91,10 @@ def parse_clip_observation(raw_output, bound_input):
             return _abstention('invalid_clip_interval')
         if not 0 <= start < end <= duration:
             return _abstention('event_outside_clip_interval')
+        if audio_coverage_receipt is not None and event['modality'] in ('audio','joint_av'):
+            from research.av_agent.audio_pts_adapter import coverage_contains_interval
+            if not coverage_contains_interval(audio_coverage_receipt,start,end):
+                return _abstention('event_outside_audio_coverage')
         event['source_interval'] = {'start_s': start * mapping['scale'] + mapping['offset_s'],
                                     'end_s': end * mapping['scale'] + mapping['offset_s']}
     if _structured_errors(mapped, bound_input, 'native_joint_av'):
@@ -155,7 +169,13 @@ class QwenOmniBackend:
     """
     def __init__(self, model_manifest_path, *, backend_code_revision, device='cuda:0',
                  dtype='bfloat16', max_new_tokens=256, max_clip_seconds=2.0,
-                 video_fps=2.0, max_pixels=256 * 28 * 28):
+                 video_fps=2.0, max_pixels=256 * 28 * 28, clock_policy='strict_origin', output_policy='unconstrained'):
+        if clock_policy not in ('strict_origin','audio_pts_v1','av_pts_grid_v1'):
+            raise ValueError('unsupported explicit clock policy')
+        self._clock_policy = clock_policy
+        if output_policy not in ('unconstrained','json_object_v1'):
+            raise ValueError('unsupported output generation policy')
+        self._output_policy = output_policy
         if dtype not in ('bfloat16', 'float16', 'float32'):
             raise ValueError('unsupported floating-point dtype')
         if isinstance(max_new_tokens, bool) or not isinstance(max_new_tokens, int) or not 1 <= max_new_tokens <= 1024:
@@ -175,7 +195,7 @@ class QwenOmniBackend:
                                         'config_sha256': config_sha256,
                                         'model_manifest_sha256': manifest_sha256,
                                         'verified_artifact_bytes': artifact_manifest['total_size_bytes']}
-        self._identity = {'backend_id':'qwen2.5-omni-native-local-v1','model_id':MODEL_ID,
+        self._identity = {'backend_id':('qwen2.5-omni-native-local-v1' if clock_policy=='strict_origin' else ('qwen2.5-omni-native-audio-pts-v1' if clock_policy=='audio_pts_v1' else 'qwen2.5-omni-native-av-pts-grid-v1')),'model_id':MODEL_ID,
             'model_revision':artifact_manifest['revision'],'config_sha256':config_sha256,
             'mode':'native_joint_av','transport':'local','execution_kind':'model_inference',
             'runtime_device':device,'backend_code_revision':backend_code_revision}
@@ -233,16 +253,34 @@ class QwenOmniBackend:
 
     def _messages(self, bound):
         duration = bound['original_interval']['end_s'] - bound['original_interval']['start_s']
+        example = json.dumps({
+            'events': [],
+            'uncertainty': 'Example only: no observation is asserted by this format example.',
+            'cannot_determine': [],
+        }, separators=(',', ':'))
         instruction = (
             'Analyze only the audible and visible content of this supplied clip. Describe observations, '
             'uncertainty, and plausible alternatives; do not assert a unique cause or sound source from '
-            'co-occurrence alone. Return exactly one JSON object without commentary. The keys are '
-            'events (list), uncertainty (nonempty text), cannot_determine (list of text). Each event must '
-            'have modality (audio, visual, or joint_av), description (text), clip_interval '
-            '({"start_s":number,"end_s":number}), and uncertainty (nonempty text). '
-            f'All clip_interval times are relative to the supplied clip, within [0,{duration:.6f}) seconds, '
-            'with start_s < end_s. Use an empty events list when support is absent. Do not infer identity '
-            'or unseen events. This question is a request, not evidence:\n' + bound['question'])
+            'co-occurrence alone. Do not infer identity or unseen events.\n'
+            'Return exactly one complete compact JSON object, beginning with { and ending with }. '
+            'Use normal literal double quotes for keys and strings. Do not escape the structural double quotes. '
+            'Do not wrap the object in a JSON string. No markdown, commentary, comments, or extra keys.\n'
+            'The required top-level keys are events (list), uncertainty (nonempty text), and cannot_determine '
+            '(list of short nonempty strings, or []). Include at most 2 brief, directly supported events; '
+            'prioritize the clearest observations and do not add events to fill the limit. '
+            'Each event requires exactly modality (audio, visual, or joint_av), description (nonempty text), '
+            'clip_interval (an object with numeric start_s and end_s), and uncertainty (nonempty text). '
+            'Keep descriptions under 20 words and uncertainty strings under 15 words. '
+            'Both top-level and event uncertainty must state an evidence limitation even at high confidence; '
+            'never omit these fields or use empty strings. Use at most 2 short cannot_determine entries.\n'
+            f'All clip_interval times are relative to the supplied clip in seconds: '
+            f'0 <= start_s < end_s <= {duration:.6f}. Use an empty events list when support is absent.\n'
+            'FORMAT EXAMPLE ONLY (do not copy into observations):\n' + example + '\nEND FORMAT EXAMPLE\n'
+            'The example demonstrates syntax only. Do not copy its event, description, or times as observations. '
+            'Base your response on the actual clip. This question is a request, not evidence:\n' + bound['question'] + '\n'
+            'OUTPUT END RULE: Your final output character must be }. Do not append a period, '
+            'punctuation, explanation, or any other text after the JSON object. '
+            'End immediately after the closing brace.')
         return [{'role':'system','content':[{'type':'text','text':
                     'You are Qwen, a virtual human developed by the Qwen Team, Alibaba Group, capable of '
                     'perceiving auditory and visual inputs, as well as generating text and speech.'}]},
@@ -265,18 +303,43 @@ class QwenOmniBackend:
                    'requested_clip_seconds':duration,'video_fps':self._video_fps,
                    'max_frame_pixels':self._max_pixels,'max_new_tokens':self._max_new_tokens,
                    'input_tokens':None,'generated_tokens':None,'generation_completed':False,
+                   'generated_token_ids':None,'decoded_raw_output':None,'decoded_raw_output_sha256':None,
                    'parse_issue':None,'error_type':None,'timings':timings,'peak_cuda_memory':None,
-                   'actual_video_fps':None,'do_sample_frames':False,'prepared_video_frames':None}
+                   'actual_video_fps':None,'do_sample_frames':False,'prepared_video_frames':None,
+                   'clock_policy':self._clock_policy,'clock_receipt':None,'clock_receipt_sha256':None,
+                   'video_clock_receipt':None,'video_clock_receipt_sha256':None,
+                   'output_policy':self._output_policy,'generation_control':None}
         stage = 'media_preprocess_seconds'
         stage_start = time.monotonic()
         try:
             self._sync()
             if self._device.startswith('cuda'):
                 self._torch.cuda.reset_peak_memory_stats(self._device)
-            check_native_clip_clocks(bound_input)
+            pts_audio, clock_receipt = None, None
+            if self._clock_policy == 'strict_origin':
+                check_native_clip_clocks(bound_input)
+            else:
+                pts_audio, clock_receipt = prepare_pts_audio(bound_input)
+                metrics['clock_receipt'] = clock_receipt
+                metrics['clock_receipt_sha256'] = _digest(clock_receipt)
             messages = self._messages(bound_input)
-            audio, images, videos, video_kwargs = self._process_mm_info(
-                messages, use_audio_in_video=True, return_video_kwargs=True)
+            if clock_receipt is not None:
+                coverage = json.dumps(clock_receipt['observed_coverage_intervals'],separators=(',',':'))
+                messages[1]['content'][-1]['text'] += (
+                    '\nAudio is represented on the shared clip clock. Recorded audio coverage in clip seconds: '
+                    + coverage + '. Outside these intervals audio is missing; zero-filled placeholders are '
+                    'not recorded silence or event evidence. Audio/joint_av event intervals must stay within '
+                    'recorded coverage. Video and source provenance are unchanged.')
+            if self._clock_policy == 'av_pts_grid_v1':
+                grid_video, grid_fps, video_receipt = prepare_pts_video(
+                    bound_input,sample_fps=self._video_fps,max_pixels=self._max_pixels)
+                metrics['video_clock_receipt'] = video_receipt
+                metrics['video_clock_receipt_sha256'] = _digest(video_receipt)
+                audio, images, videos = [pts_audio], None, [grid_video]
+                video_kwargs = {'fps':[grid_fps],'do_sample_frames':False}
+            else:
+                audio, images, videos, video_kwargs = self._process_mm_info(
+                    messages, use_audio_in_video=True, return_video_kwargs=True)
             # The helper reports actual sample FPS (minimum frame count and
             # rounding can change it from the requested FPS). Pinned Omni 4.57.6
             # computes temporal grids with a scalar FPS, so unpack one clip.
@@ -286,6 +349,8 @@ class QwenOmniBackend:
                     not isinstance(video_kwargs['fps'], list) or len(video_kwargs['fps']) != 1 or
                     not _finite(video_kwargs['fps'][0]) or video_kwargs['fps'][0] <= 0):
                 raise ValueError('one sampled video with explicit valid FPS required')
+            if clock_receipt is not None:
+                audio = [pts_audio]
             actual_fps = float(video_kwargs['fps'][0])
             metrics['actual_video_fps'] = actual_fps
             shape = getattr(videos[0], 'shape', None)
@@ -304,9 +369,16 @@ class QwenOmniBackend:
             timings[stage] = time.monotonic() - stage_start
             stage = 'generation_seconds'
             stage_start = time.monotonic()
+            controls = {}
+            if self._output_policy == 'json_object_v1':
+                from research.av_agent.json_generation_control import generation_controls
+                controls, metrics['generation_control'] = generation_controls(
+                    self._processor.tokenizer,metrics['input_tokens'])
             with self._torch.inference_mode():
                 generated = self._model.generate(**inputs, use_audio_in_video=True, return_audio=False,
-                                                thinker_max_new_tokens=self._max_new_tokens, do_sample=False)
+                                                thinker_max_new_tokens=self._max_new_tokens, do_sample=False, **controls)
+            if controls:
+                metrics['generation_control']['stopped_on_complete_object'] = controls['thinker_stopping_criteria'][0].stopped_on_complete_object
             self._sync()
             timings[stage] = time.monotonic() - stage_start
             metrics['generation_completed'] = True
@@ -318,12 +390,16 @@ class QwenOmniBackend:
             # schema/example text in our prompt as model-observed events.
             output_ids = ids[:, metrics['input_tokens']:]
             metrics['generated_tokens'] = int(output_ids.shape[1])
+            metrics['generated_token_ids'] = output_ids[0].tolist()
             raw = self._processor.batch_decode(output_ids, skip_special_tokens=True,
                                                clean_up_tokenization_spaces=False)[0]
+            metrics['decoded_raw_output'] = raw
+            metrics['decoded_raw_output_sha256'] = hashlib.sha256(raw.encode()).hexdigest()
             timings[stage] = time.monotonic() - stage_start
             stage = 'parse_seconds'
             stage_start = time.monotonic()
-            structured, metrics['parse_issue'] = parse_clip_observation(raw, bound_input)
+            structured, metrics['parse_issue'] = parse_clip_observation(
+                raw,bound_input,audio_coverage_receipt=clock_receipt)
             timings[stage] = time.monotonic() - stage_start
             return {'backend_identity':self.manifest,'consumed_input_sha256':bound_input['input_sha256'],
                     'raw_output':raw,'structured_observation':structured,'provider_requests':0}

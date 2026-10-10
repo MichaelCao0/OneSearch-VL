@@ -164,7 +164,11 @@ def run(args):
        'runtime_lock_sha256':sha256_file(runtime_lock) if runtime_lock.is_file() else None,
        'default_environment_lock_sha256':sha256_file(ROOT/'pixi.lock'),
        'selection_claim':'Caller supplies fixed natural-source bindings; this CLI does not synthesize or adjudicate probes.',
-       'binding_count':len(bindings),'budgets':{'max_clips':args.max_clips,'max_clip_seconds':args.max_clip_seconds,
+       'binding_count':len(bindings),'clock_policy':args.clock_policy,'output_policy':args.output_policy,
+       'generation_control_code_sha256':sha256_file(ROOT/'research/av_agent/json_generation_control.py') if args.output_policy=='json_object_v1' else None,
+       'clock_adapter_code_sha256':sha256_file(ROOT/'research/av_agent/audio_pts_adapter.py') if args.clock_policy!='strict_origin' else None,
+       'video_sampler_code_sha256':sha256_file(ROOT/'research/av_agent/video_pts_sampler.py') if args.clock_policy=='av_pts_grid_v1' else None,
+       'budgets':{'max_clips':args.max_clips,'max_clip_seconds':args.max_clip_seconds,
                                              'max_new_tokens':args.max_new_tokens,'video_fps':args.video_fps,
                                              'max_frame_pixels':args.max_pixels},
        'device':args.device,'dtype':args.dtype,'input_bindings':bindings,
@@ -187,7 +191,7 @@ def run(args):
         backend = QwenOmniBackend(args.model_manifest, backend_code_revision=head, device=args.device,
                                   dtype=args.dtype, max_new_tokens=args.max_new_tokens,
                                   max_clip_seconds=args.max_clip_seconds, video_fps=args.video_fps,
-                                  max_pixels=args.max_pixels)
+                                  max_pixels=args.max_pixels, clock_policy=args.clock_policy, output_policy=args.output_policy)
     except Exception as exc:
         # No input is attempted after a load/identity failure. Preserve the fixed
         # planned denominator and safe class, never the private exception text.
@@ -201,6 +205,10 @@ def run(args):
             cost = backend.last_metrics
             cost['observation_id'] = record['observation_id']
             cost['observation_status'] = record['status']
+            if cost.get('clock_receipt') is not None:
+                _write(destination/f'clock-receipt-{index:04d}.private.json',cost['clock_receipt'])
+            if cost.get('video_clock_receipt') is not None:
+                _write(destination/f'video-clock-receipt-{index:04d}.private.json',cost['video_clock_receipt'])
             records.append(record)
             costs.append(cost)
             # Persist after every attempt so interrupted runs keep completed work.
@@ -244,7 +252,9 @@ def run(args):
        'runtime_identity_manifest_sha256':run_identity['runtime_identity_manifest_sha256'],
        'live_runtime_receipt_sha256':run_identity['live_runtime_receipt_sha256'],
        'live_runtime_status':run_identity['live_runtime_status'],
-       'mode':'native_joint_av','transport':'local','actual_provider_requests':counts['provider_requests_known'],
+       'mode':'native_joint_av','clock_policy':args.clock_policy,
+       'clock_adapter_code_sha256':run_identity['clock_adapter_code_sha256'],
+       'transport':'local','actual_provider_requests':counts['provider_requests_known'],
        'requested_av_seconds':sum(x['original_interval']['end_s']-x['original_interval']['start_s'] for x in bindings),
        'peak_cuda_allocated_bytes':max(peak_allocated) if peak_allocated else None,
        'peak_cuda_reserved_bytes':max(peak_reserved) if peak_reserved else None,
@@ -254,6 +264,8 @@ def run(args):
        'generation_seconds':sum(x['timings']['generation_seconds'] for x in costs),
        'observer_infer_seconds':sum(x['timings']['total_infer_seconds'] for x in costs),
        'total_wall_seconds':time.monotonic()-started,'budgets':run_identity['budgets'],
+       'output_policy':args.output_policy,'generation_control_code_sha256':run_identity['generation_control_code_sha256'],
+       'video_sampler_code_sha256':run_identity['video_sampler_code_sha256'],
        'human_validated_clip_count':0,'human_semantic_validation_status':'pending','raw_av_observer_ready':False,
        'semantic_claim':'Actual model execution and JSON contract checks are reported separately. No independent semantic probe passed here.'}
     _write(destination/'summary.public.json', summary)
@@ -269,6 +281,9 @@ def main(argv=None):
     parser.add_argument('--bindings',type=Path,required=True,help='Private exact av-observer-smoke-bindings-0.1 JSON inputs')
     parser.add_argument('--model-manifest',type=Path,required=True,help='Immutable pinned local model artifact manifest')
     parser.add_argument('--output-dir',type=Path,required=True,help='New private persistent run directory; overwrite forbidden')
+    parser.add_argument('--clock-policy',choices=['strict_origin','audio_pts_v1','av_pts_grid_v1'],default='strict_origin',
+                        help='Explicit model-input clock adapter; raw media and bindings are never rewritten')
+    parser.add_argument('--output-policy',choices=['unconstrained','json_object_v1'],default='unconstrained')
     parser.add_argument('--device',default='cuda:0')
     parser.add_argument('--dtype',choices=['bfloat16','float16','float32'],default='bfloat16')
     parser.add_argument('--max-clips',type=int,default=6)
