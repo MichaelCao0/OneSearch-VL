@@ -6,6 +6,7 @@ configuration. Semantic AV observer is injected, or its unavailability is return
 from __future__ import annotations
 import argparse
 import json
+import math
 import os
 from pathlib import Path
 import urllib.request
@@ -42,11 +43,34 @@ class ToolRuntime:
             if self.cost['requested_av_seconds']+end-start>self.budget['max_requested_av_seconds']:raise ValueError('AV budget exceeded')
             self.cost['requested_av_seconds']+=end-start
         self.cost['tool_calls']+=1
-        if tool=='search_sources':return search_sources(self.index_dir,a['query'],self.scope,a['top_k'])
+        if tool=='search_sources':
+            receipt=search_sources(self.index_dir,a['query'],self.scope,a['top_k'])
+            for result in receipt['results']:
+                source=self.sources[result['source_id']]
+                result['media_type']=source['media_type']
+                if source['media_type']=='audio_video':result['duration_s']=source['duration_s']
+            return receipt
         if tool=='read_text':return read_text(self.index_dir,a['source_id'],a['start_char'],a['end_char'],self.scope)
         output=self.output_dir/('inspect-'+str(self.cost['tool_calls']))
-        if self.observer is not None:return self.observer(self.sources[a['source_id']],a['start_s'],a['end_s'],output)
-        receipt,_=inspect_av(self.sources[a['source_id']],a['start_s'],a['end_s'],output)
+        if self.observer is not None:
+            receipt=self.observer(self.sources[a['source_id']],a['start_s'],a['end_s'],output)
+        else:
+            receipt,_=inspect_av(self.sources[a['source_id']],a['start_s'],a['end_s'],output)
+        # Sum measured resource values, including failed/fixture observer attempts.
+        # Missing metrics stay absent; counters distinguish partial sums from zero.
+        actual=receipt.get('actual_cost',{})
+        aliases={'returned_video_frames':'prepared_video_frames',
+                 'decoded_audio_samples':'prepared_audio_samples','output_bytes':'prepared_output_bytes'}
+        for key,value in actual.items():
+            if isinstance(value,(int,float)) and not isinstance(value,bool) and math.isfinite(value) and value>=0:
+                key=aliases.get(key,key)
+                self.cost[key]=self.cost.get(key,0)+value
+        if self.observer is not None:
+            for key in ('input_tokens','generated_tokens'):
+                value=actual.get(key)
+                if not isinstance(value,(int,float)) or isinstance(value,bool) or not math.isfinite(value) or value<0:
+                    counter=key+'_unknown_observations'
+                    self.cost[counter]=self.cost.get(counter,0)+1
         return receipt
 
 class OpenAIController:
