@@ -1,0 +1,32 @@
+[workspace]
+name = "onesearch-vl-native-av-observer"
+version = "0.1.0"
+description = "Isolated CUDA Qwen2.5-Omni native audio-video observer"
+channels = ["conda-forge"]
+platforms = ["linux-64"]
+
+[dependencies]
+python = "3.11.*"
+ffmpeg = ">=7,<8"
+
+[pypi-options]
+index-url = "https://pypi.org/simple"
+extra-index-urls = ["https://download.pytorch.org/whl/cu126"]
+
+[pypi-dependencies]
+torch = "==2.8.0+cu126"
+torchvision = "==0.23.0+cu126"
+transformers = "==4.57.6"
+qwen-omni-utils = { version = "==0.0.9", extras = ["decord"] }
+accelerate = "==1.11.0"
+huggingface-hub = "==0.36.0"
+librosa = "==0.11.0"
+av = "==16.0.1"
+numpy = "==2.2.6"
+soundfile = "==0.13.1"
+safetensors = "==0.6.2"
+pillow = "==11.3.0"
+
+[tasks]
+av-import-probe = "python ../../research/scripts/av_omni_setup.py probe"
+av-acquire = "python ../../research/scripts/av_omni_setup.py acquire"

@@ -1,0 +1,79 @@
+{
+  "schema_version": "av-observer-runtime-manifest-v1",
+  "repository_id": "Qwen/Qwen2.5-Omni-7B",
+  "revision": "ae9e1690543ffd5c0221dc27f79834d0294cba00",
+  "platform": "linux-64",
+  "python_series": "3.11",
+  "packages": {
+    "torch": "2.8.0+cu126",
+    "torchvision": "0.23.0+cu126",
+    "transformers": "4.57.6",
+    "qwen-omni-utils": "0.0.9",
+    "accelerate": "1.11.0",
+    "huggingface-hub": "0.36.0"
+  },
+  "cuda_wheel_runtime": "12.6",
+  "transformers_source_commit": "753d61104116eefc8ffc977327b441ee0c8d599f",
+  "model_bytes_cap": 30000000000,
+  "model_bytes_preflight": 22379297323,
+  "expected_lfs": [
+    {
+      "path": "model-00001-of-00005.safetensors",
+      "size_bytes": 4985055504,
+      "expected_sha256": "5edb02fd7c98803239468375cc9dc1bff492865c2aa086b78f348597021d6cbc"
+    },
+    {
+      "path": "model-00002-of-00005.safetensors",
+      "size_bytes": 4991496800,
+      "expected_sha256": "7c99b55c6e5bc63fd4b19d4dc23cdc3ddac4b0101bb3c0958cc2b5d05c2bbafe"
+    },
+    {
+      "path": "model-00003-of-00005.safetensors",
+      "size_bytes": 4991496904,
+      "expected_sha256": "ad00c3ac296300db905934ed213c4077ff49b85d30c0099270c814e2c77ec812"
+    },
+    {
+      "path": "model-00004-of-00005.safetensors",
+      "size_bytes": 4969489824,
+      "expected_sha256": "152bc7d81441eaba22547d8d96c03d32dd592ce0e0e1d0e449347a4b23a532d3"
+    },
+    {
+      "path": "model-00005-of-00005.safetensors",
+      "size_bytes": 2425322160,
+      "expected_sha256": "b8b18276481ba8cdf4fe2c98ac4c7a2da6e0d1c8a51850d162a391760cb2b81e"
+    },
+    {
+      "path": "spk_dict.pt",
+      "size_bytes": 259544,
+      "expected_sha256": "6a05609b28f5d42b7b748f0f07592545c8f1f6885b9ae8fff64baf56e86b2a18"
+    },
+    {
+      "path": "tokenizer.json",
+      "size_bytes": 11421870,
+      "expected_sha256": "8441917e39ae0244e06d704b95b3124795cec478e297f9afac39ba670d7e9d99"
+    }
+  ],
+  "lock_sha256": "b124706cbceb5eff1ea6eacbe4fa93870bfc9fc10dcfb867a026b534c66bf3ce",
+  "usage": {
+    "model_class": "Qwen2_5OmniForConditionalGeneration",
+    "processor_class": "Qwen2_5OmniProcessor",
+    "utility": "qwen_omni_utils.process_mm_info",
+    "use_audio_in_video": true,
+    "enable_audio_output": false,
+    "return_audio": false,
+    "local_files_only": true
+  },
+  "evidence_directory": "research/runs/av-native-smoke-20261010-v1/runtime-setup",
+  "verification_boundaries": {
+    "cpu_setup_model_loaded": false,
+    "gpu_inference_claimed": false
+  },
+  "preparation_status": "runtime_import_and_raw_av_processor_verified_model_acquisition_pending",
+  "verification_evidence": {
+    "locked_install": "research/runs/av-native-smoke-20261010-v1/runtime-setup/pixi-locked-install.log",
+    "imports": "research/runs/av-native-smoke-20261010-v1/runtime-setup/import-probe.json",
+    "raw_av_processor_cpu": "research/runs/av-native-smoke-20261010-v1/runtime-setup/processor-probe.json",
+    "acquisition_gates": "research/runs/av-native-smoke-20261010-v1/runtime-setup/acquisition-gate-probe.json",
+    "model_manifest_pending": "research/runs/av-native-smoke-20261010-v1/runtime-setup/model-manifest.json"
+  }
+}
