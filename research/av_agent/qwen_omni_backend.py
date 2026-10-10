@@ -243,7 +243,9 @@ class QwenOmniBackend:
             f'All clip_interval times are relative to the supplied clip, within [0,{duration:.6f}) seconds, '
             'with start_s < end_s. Use an empty events list when support is absent. Do not infer identity '
             'or unseen events. This question is a request, not evidence:\n' + bound['question'])
-        return [{'role':'system','content':'You observe audible and visible events conservatively and report uncertainty.'},
+        return [{'role':'system','content':[{'type':'text','text':
+                    'You are Qwen, a virtual human developed by the Qwen Team, Alibaba Group, capable of '
+                    'perceiving auditory and visual inputs, as well as generating text and speech.'}]},
                 {'role':'user','content':[{'type':'video','video':bound['clip_path'],
                                           'fps':self._video_fps,'max_pixels':self._max_pixels},
                                          {'type':'text','text':instruction}]}]

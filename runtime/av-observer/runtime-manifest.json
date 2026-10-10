@@ -68,12 +68,14 @@
     "cpu_setup_model_loaded": false,
     "gpu_inference_claimed": false
   },
-  "preparation_status": "runtime_import_and_raw_av_processor_verified_model_acquisition_pending",
+  "preparation_status": "runtime_and_model_assets_verified_gpu_execution_pending",
   "verification_evidence": {
     "locked_install": "research/runs/av-native-smoke-20261010-v1/runtime-setup/pixi-locked-install.log",
     "imports": "research/runs/av-native-smoke-20261010-v1/runtime-setup/import-probe.json",
     "raw_av_processor_cpu": "research/runs/av-native-smoke-20261010-v1/runtime-setup/processor-probe.json",
     "acquisition_gates": "research/runs/av-native-smoke-20261010-v1/runtime-setup/acquisition-gate-probe.json",
-    "model_manifest_pending": "research/runs/av-native-smoke-20261010-v1/runtime-setup/model-manifest.json"
-  }
+    "model_manifest": "research/runs/av-native-smoke-20261010-v1/runtime-setup/model-manifest.json",
+    "setup_report": "research/runs/av-native-smoke-20261010-v1/runtime-setup/setup-report.json"
+  },
+  "model_manifest_sha256": "dc5264f22c6368d972f797430e9877a17b7af59cf513607c9c387eda0d0a9462"
 }

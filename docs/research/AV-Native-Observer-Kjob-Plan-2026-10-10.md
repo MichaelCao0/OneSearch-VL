@@ -15,7 +15,7 @@
 1. read-only 检查个人队列、模板和挂载，使用 `kjobctl create slurm --dry-run client` 生成对象。
 2. 在生成对象中明确单节点/单卡、Job deadline、无重试和 project labels，再进行 server dry-run，成功后创建。
 3. preflight 验证 GPU inventory、共享代码/registry 与输出持久化。队列名称是 H200，已运行 worker 实际 inventory 是 `NVIDIA H20Z`；报告实际硬件。
-4. 原模板 privileged 能看见整机 GPU。模型 job 将 privileged 关闭，使用 device-plugin 单个 GPU mask；若 PyTorch 仍看见多个设备，停止模型加载，不选择任意空闲卡。
+4. 核对实际 worker 的 privilege 与设备暴露。最初关闭 privileged 未获得 CUDA；诊断后沿用部署模板的 privileged，通过分配 UUID → NVML PCI → CUDA ordinal 动态映射，在新进程核验单卡可见且 PCI 与分配一致。此为进程 CUDA mask，不是 OS 级设备隔离；若核验失败，停止模型加载。
 5. 冻结六个实际 lossless AV clip 的 hash、时间映射和输入 hash；`make_observer_input` 及媒体准备纳入媒体工作计量。
 6. 独立审核 backend、artifact manifest 与 CLI。实际 GPU Job 先记录 torch/CUDA、设备隔离并执行真实 CUDA matmul，再用本地 verified snapshot 生成。
 7. 保存逐调用原始文本、结构化候选、解析失败、GPU allocator peak、tokens、时间和模型/代码/lock 身份。失败保留在固定分母；不把解析失败替代结构当成有效事件。
@@ -30,3 +30,16 @@
 ## CPU 预处理发现与处置
 
 官方 helper 实际读取六个片段时，第一个 source 的 lossless clip 保留了 audio `output_start_time_s=1.012`，video 为零；原始媒体保存同步是正确的，但转成 ndarray 后 helper 不携带这个时间起点。当前 native backend 因而在 helper/model 之前拒绝该输入，不补零、不重选片段；固定六个输入的分母保持不变。2 ms 容差仅容纳 Matroska timestamp rounding。通过此门限不代表毫秒级事件定位或音画同步判断已成立；低 FPS sampling 与 array presentation 仍是模型输入近似。
+
+## 集群执行修订与预算记录
+
+第一轮模型 job `slurm-profile-slurm-4zz4g` 在 CUDA 初始化前失败，未加载模型；恢复部署模板的 privileged 后，第二轮 `slurm-profile-slurm-h6jt7` 仍未获得可用 CUDA。privilege 假设因此不能解释结果。两轮均保留独立日志和 terminal state，不覆盖失败。
+
+第三轮 `slurm-profile-slurm-58x5k` 增加 driver-level 只读 inventory：device-plugin 分配的单个 NVIDIA UUID 必须匹配 NVML 的 PCI 地址，再唯一映射到 CUDA ordinal；新进程采用 `CUDA_DEVICE_ORDER=PCI_BUS_ID` 和该 ordinal。模型前必须核验可见设备数为一、CUDA 中的 PCI 地址与分配一致，并通过实际 CUDA matmul。未分配 GPU 只作 inventory 查询，不进行计算。本集群本次通过此路径获得 `NVIDIA H20Z`。
+
+允许有明确根因证据的修正重试，仍受原单卡/CPU/RAM 和累计 2100 秒上限约束，没有 Kubernetes backoff 重试。独立审计将计时统一为 Job.startTime 到 Complete/Failed condition：preflight 和前三轮模型任务分别为 14、44、21、160 秒，共 239 秒；下一次 deadline 为 1800 秒，仍低于剩余 1861 秒。第四轮实际 98 秒，最终总计 337 秒。`budget.json` 保留每轮 API 时间、修订原因及历史快照。此前 73 秒值混用了容器终止与 Job 终态口径，已明确废弃。
+
+
+## 最终执行层结果
+
+第四轮 `slurm-profile-slurm-gmfbk` 在实际 NVIDIA H20Z 上完成五次原生 AV generation；第一固定片段仍因 1.012 秒 audio 起点差异在生成前被拒绝。五份原始输出均未通过严格 JSON 协议（未自动去转义或补全），因此 valid structured output 为 0/6。Job 因一个明确的 clock-gate failure 返回 exit 1，终态 Failed；不存在已完成 observer 能力验收的结论。具体成本、hash 与后续门限见 [执行报告](AV-Native-Observer-Kjob-Execution-2026-10-10.md)。

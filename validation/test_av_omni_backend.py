@@ -185,6 +185,23 @@ class OmniBackendTests(unittest.TestCase):
 
     @unittest.skipUnless(importlib.metadata.version('transformers')=='4.57.6',
                          'requires pinned isolated Omni runtime; no weights are loaded')
+    def test_backend_messages_pass_official_pinned_system_prompt_guard(self):
+        backend = self.backend()
+        messages = backend._messages(self.bound)
+        self.module_patch.stop()
+        from transformers import Qwen2_5OmniProcessor
+        from transformers.processing_utils import ProcessorMixin
+        # Execute the official Omni guard, which indexes the system content
+        # before delegating to the shared tokenizer. No model weights needed.
+        processor = object.__new__(Qwen2_5OmniProcessor)
+        with patch.object(ProcessorMixin, 'apply_chat_template', return_value='guard-passed') as delegate:
+            rendered = processor.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
+        self.assertEqual(rendered, 'guard-passed')
+        delegate.assert_called_once()
+        self.assertIn('co-occurrence alone', messages[1]['content'][1]['text'])
+
+    @unittest.skipUnless(importlib.metadata.version('transformers')=='4.57.6',
+                         'requires pinned isolated Omni runtime; no weights are loaded')
     def test_real_pinned_helper_and_processor_preserve_actual_fps_clock(self):
         # Genuine CPU media decoding and the official processor __call__ path,
         # with tokenizer/video geometry stubs only; no model weights or gold.
