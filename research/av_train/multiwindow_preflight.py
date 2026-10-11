@@ -1,5 +1,5 @@
 """Freeze already prepared train/dev windows and rebuild runtime search indices."""
-import argparse,json,subprocess
+import argparse,json,re,subprocess
 from pathlib import Path
 from research.av_data.build_research_batch import write_json
 from research.av_data.media_clock import sha256_file
@@ -8,7 +8,8 @@ from research.av_train.multiwindow import group_clues
 from research.av_train.searchqa import prepare_runtime_corpus
 
 def main():
-    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--run-dir',required=True);a=p.parse_args();r=Path(a.run_dir)
+    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--run-dir',required=True);p.add_argument('--output-name',default='gpu-inputs-v1');a=p.parse_args();r=Path(a.run_dir)
+    if not re.fullmatch(r'gpu-inputs-v[1-9][0-9]*',a.output_name):raise ValueError('Versioned child output directory required')
     split_batches={'train':r/'train21-v2','dev':Path('research/runs/av-clue-searchqa-20261012-v1/development-context-final-v3')}
     inputs=[];identities={};groups=[]
     for split,batch in split_batches.items():
@@ -23,7 +24,7 @@ def main():
         identities[split]={'prepared_sha256':sha256_file(prepared),'plan_sha256':sha256_file(planfile),'windows':len(bound['inputs']),**frozen}
     group_clues(groups)
     if len(inputs)!=75 or identities['train']['windows']!=27 or identities['dev']['windows']!=48:raise ValueError('Expected exactly 27 train and 48 dev windows')
-    out=r/'gpu-inputs-v1';out.mkdir(exist_ok=False)
+    out=r/a.output_name;out.mkdir(exist_ok=False)
     write_json(out/'bindings.private.json',{'schema_version':'av-multiwindow-prepared-inputs.v1','inputs':inputs,'split_receipts':identities})
     for split,batch in split_batches.items():prepare_runtime_corpus(batch,out/f'corpus-{split}-sft')
     write_json(out/'preflight.private.json',{'status':'prepared','git_head':subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),'inputs':identities,'window_count':75,'observer_executed':False,'locks':{str(p):sha256_file(p) for p in [Path('runtime/av-observer/pixi.lock'),Path('runtime/sft-gpu/pixi.lock')]}})

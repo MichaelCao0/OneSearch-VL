@@ -26,13 +26,6 @@ def attempt_schedule(tasks,count,seed):
     if isinstance(seed,bool) or not isinstance(seed,int) or seed<0 or seed+count>=2**32:raise ValueError('Bounded integer seed required')
     return [{'attempt':i+1,'task':json_copy(tasks[i%len(tasks)]),'seed':seed+i} for i in range(count)]
 
-class InitialWindows:
-    def __init__(self,controller,clue_id,windows):
-        self.controller=controller;self.actions=[{'action':{'tool':'inspect_av','arguments':{'source_id':clue_id,'start_s':w['start_s'],'end_s':w['end_s']}}} for w in windows]
-    @property
-    def total_tokens(self):return self.controller.total_tokens
-    def __call__(self,history):return self.actions.pop(0) if self.actions else self.controller(history)
-
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     for key in ('batch-dir','index-dir','observer-dir','out-dir'):p.add_argument('--'+key,required=True)
@@ -61,7 +54,7 @@ def main():
         if len(w)!=3:raise ValueError('Each training clue requires exactly three real executed windows')
         windows[b['clue_id']]=w
     out=Path(a.out_dir);out.mkdir(parents=True,exist_ok=False)
-    write_json(out/'input-manifest.private.json',{'tasks_sha256':sha256_file(batch/'tasks-public.jsonl'),'bindings_sha256':sha256_file(batch/'clue-bindings.private.json'),'observer_dir':a.observer_dir,'sampling':options,'attempts':[{'attempt':x['attempt'],'task_id':x['task']['task_id'],'seed':x['seed']} for x in schedule],'private_references_given_to_controller':False,'mode':a.mode,'adapter':a.adapter})
+    write_json(out/'input-manifest.private.json',{'tasks_sha256':sha256_file(batch/'tasks-public.jsonl'),'bindings_sha256':sha256_file(batch/'clue-bindings.private.json'),'observer_dir':a.observer_dir,'sampling':options,'attempts':[{'attempt':x['attempt'],'task_id':x['task']['task_id'],'seed':x['seed']} for x in schedule],'private_references_given_to_controller':False,'mode':a.mode,'adapter':a.adapter,'checkpoint':a.checkpoint,'model_tool_calls':a.model_tool_calls,'max_new_tokens':a.max_new_tokens,'initial_context_policy':'executed_av_observations_v1'})
     controller=(LocalController(a.checkpoint,out/'generations',a.max_new_tokens,protocol='canonical') if a.controller_kind=='onesearch' else LocalOmniController(a.model_manifest,out/'generations',a.max_new_tokens,protocol='canonical'))
     if a.adapter:
         from peft import PeftModel
@@ -79,7 +72,8 @@ def main():
         controller.episode_seed=item['seed'];controller.torch.manual_seed(item['seed']);controller.torch.cuda.manual_seed_all(item['seed'])
         runtime=ClueSearchQARuntime(a.index_dir,scope,sources,[by_clue[clue]],folder/'tools',task['budget_recipe'],observer)
         before=controller.calls;tokens_before=controller.total_tokens
-        trace=run_episode(task,runtime,InitialWindows(controller,clue,w),controller.identity,system_prompt=system,recover_tool_errors=True)
+        initial_actions=[{'tool':'inspect_av','arguments':{'source_id':clue,'start_s':v['start_s'],'end_s':v['end_s']}} for v in w]
+        trace=run_episode(task,runtime,controller,controller.identity,system_prompt=system,recover_tool_errors=True,initial_actions=initial_actions,include_budget_prompt=False)
         trace['final']['cost']['controller_tokens']=controller.total_tokens-tokens_before
         write_json(folder/'trace.private.json',trace);metric=score_candidate_diagnostic(trace,refs[tid]);write_json(folder/'diagnostic.json',metric)
         result={'attempt':item['attempt'],'task_id':tid,'seed':item['seed'],'model_decisions':controller.calls-before,'status':trace['final'].get('status'),'retained':False}

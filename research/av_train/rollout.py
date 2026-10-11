@@ -94,14 +94,34 @@ class OpenAIController:
         self.total_tokens+=body.get('usage',{}).get('total_tokens',0)
         return json.loads(body['choices'][0]['message']['content'])
 
-def run_episode(task,runtime,controller,teacher,*,system_prompt=SYSTEM,recover_tool_errors=False):
+def initial_av_context(task,observations):
+    key="initial_av_observation" if len(observations)==1 else "initial_av_observations"
+    value=public_observation(observations[0]) if len(observations)==1 else [public_observation(o) for o in observations]
+    return {"task":json_copy(task),key:value}
+
+
+def run_episode(task,runtime,controller,teacher,*,system_prompt=SYSTEM,recover_tool_errors=False,initial_actions=None,include_budget_prompt=True):
     validate_task(task,{'corpus_id':task['corpus_id'],'split':task['split'],'source_ids':runtime.source_ids})
     tools=runtime.tool_definitions() if hasattr(runtime,'tool_definitions') else json_copy(TOOL_DEFINITIONS)
     history=[{'role':'system','content':system_prompt+'\nTools: '+json.dumps(tools,ensure_ascii=False,allow_nan=False)},
              {'role':'user','content':json.dumps(task,ensure_ascii=False)}]
     steps=[];final={'status':'tool_budget_exhausted'}
-    for turn_index in range(task['budget_recipe']['max_tool_calls']+1):
-        if recover_tool_errors and turn_index==task['budget_recipe']['max_tool_calls']:
+    prefix_failed=False
+    if initial_actions is not None:
+        if not isinstance(initial_actions,list) or not 1<=len(initial_actions)<=task['budget_recipe']['max_tool_calls']:raise ValueError('Bounded nonempty initial AV actions required')
+        for action in initial_actions:
+            if not isinstance(action,dict) or set(action)!={'tool','arguments'} or action['tool']!='inspect_av' or not isinstance(action['arguments'],dict) or action['arguments'].get('source_id') not in task['initial_sources']:raise ValueError('Initial context must inspect task query media only')
+        for action in initial_actions:
+            try:receipt=runtime.execute(action)
+            except Exception as exc:
+                receipt={'status':'tool_error','error_type':type(exc).__name__,'message':'Initial AV input could not be observed.'}
+            steps.append(make_step(action,receipt))
+            if receipt.get('status')!='ok' or receipt.get('model_executed') is not True:
+                final={'status':'initial_observation_failed'};prefix_failed=True;break
+        if not prefix_failed:history[1]['content']=json.dumps(initial_av_context(task,[s['observation'] for s in steps]),ensure_ascii=False)
+    remaining=task['budget_recipe']['max_tool_calls']-len(steps)
+    for turn_index in ([] if prefix_failed else range(remaining+1)):
+        if include_budget_prompt and recover_tool_errors and turn_index==remaining:
             history.append({'role':'user','content':'No tool turns remain. Return your final answer now using only the actual observations already available. If insufficient, say so. Do not issue another tool call.'})
         try:decision=json_copy(controller(json_copy(history)))
         except Exception as exc:

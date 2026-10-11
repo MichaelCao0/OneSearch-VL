@@ -12,6 +12,8 @@ umask 077
 cd /home/jovyan/OneSearch-VL
 AV_RUN=research/runs/av-multiwindow-20261012-v1
 export AV_RUN
+AV_INPUTS="$AV_RUN/gpu-inputs-v2"
+export AV_INPUTS
 AV_STAGE="${1:?observe, teacher, train, or evaluate required}"
 case "$AV_STAGE" in observe) AV_LIMIT=900;; teacher) AV_LIMIT=1200;; train) AV_LIMIT=600;; evaluate) AV_LIMIT=900;; *) exit 2;; esac
 export AV_STAGE AV_LIMIT
@@ -23,7 +25,7 @@ pixi run --locked --manifest-path runtime/sft-gpu/pixi.toml python - <<'PY'
 import json,os,subprocess
 from pathlib import Path
 from research.av_data.media_clock import sha256_file
-p=json.loads((Path(os.environ['AV_RUN'])/'gpu-inputs-v1/preflight.private.json').read_text())
+p=json.loads((Path(os.environ['AV_INPUTS'])/'preflight.private.json').read_text())
 assert p['git_head']==subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()
 for path,value in p['locks'].items():assert sha256_file(path)==value
 subprocess.run(['git','diff','--quiet'],check=True)

@@ -53,8 +53,8 @@ def anonymous_silver_row(trace,source_splits,required_terms,*,initial_observatio
     successful_reads=[s['observation'].get('quote',{}).get('text','') for s in t['steps'][initial_observation_count:] if s['action']['tool']=='read_text' and s['observation'].get('status')=='ok']
     if not any(all(field_present(x,text) for x in required_terms) for text in successful_reads):raise ValueError('Requested fields require an actual successful text read')
     if not any(s['action']['tool']=='search_sources' and s['observation'].get('status')=='ok' and s['observation'].get('results') for s in t['steps'][initial_observation_count:]):raise ValueError('Actual source discovery required')
-    initial={'task':t['task']}
-    initial['initial_av_observation' if initial_observation_count==1 else 'initial_av_observations']=(public_observation(initial_steps[0]['observation']) if initial_observation_count==1 else [public_observation(s['observation']) for s in initial_steps])
+    from .rollout import initial_av_context
+    initial=initial_av_context(t['task'],[s['observation'] for s in initial_steps])
     turns=[{'from':'human','value':json.dumps(initial,ensure_ascii=False)}]
     for step in t['steps'][initial_observation_count:]:
         turns.extend([{'from':'gpt','value':json.dumps({'action':step['action']},ensure_ascii=False)},

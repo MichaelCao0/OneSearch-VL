@@ -47,7 +47,7 @@ Controller 起点为发布的 OneSearch-VL-8B，revision `2623603767b9fef7bab05a
 CPU preflight（全部窗口准备完之后，在 sft-gpu Pixi 环境执行）:
 
 ```bash
-pixi run --locked --manifest-path runtime/sft-gpu/pixi.toml python -m research.av_train.multiwindow_preflight --run-dir research/runs/av-multiwindow-20261012-v1
+pixi run --locked --manifest-path runtime/sft-gpu/pixi.toml python -m research.av_train.multiwindow_preflight --run-dir research/runs/av-multiwindow-20261012-v1 --output-name gpu-inputs-v2
 ```
 
 GPU 脚本、preflight 和采集/训练/评测 CLI 已准备；CPU 检查不等于它们已在 GPU 完整运行。
@@ -57,3 +57,14 @@ GPU 脚本、preflight 和采集/训练/评测 CLI 已准备；CPU 检查不等�
 当前先报告每题候选字段命中、目标来源召回、实际读到目标文本、工具调用、观察秒数与失败类型。正式主指标 Answer Accuracy 需要人工确认答案语义，字段字符串匹配不能代替它。开发集用于定位问题，不作为独立测试集。
 
 本批对照先确认轨迹训练是否带来收益。后续扩展 benchmark 的音频线索、动作/时序线索、声画联合识别及外部知识问答，增加来源家族独立的 test；训练扩展到 128–256 条、2K pilot。进一步比较无搜索、无音频、固定窗口与动态检查。冻结语料结果与开放互联网检索结果分别报告。
+
+
+## 采集、训练和评测的输入对齐修正
+
+三个初始窗口仍通过 runtime 实际检查，并计入工具和观察预算；执行记录保存在 trace 中。Controller 首次生成前收到一个用户上下文，其中同时包含任务与三个公共观察。SFT 导出使用相同函数生成这段上下文，评测也执行同一路径；预设检查动作不进入 assistant 训练目标。新多窗口运行不加入导出中不存在的额外终止提示。
+
+已用真实发布 8B tokenizer、LLaMA-Factory converter/template/processor 完成 CPU fixture 检查：搜索、读取和最终回答三个生成前缀均与 native 训练 token 前缀完全一致；fixture 的 trajectory targets 为 99 token，answer-only 为 27 token，观察保持屏蔽。数字仅描述该测试 fixture，不是训练数据量、真实 teacher 执行或 optimizer update。
+
+对照汇总同时要求任务、媒体绑定、observer 目录、采样设置、工具预算、生成上限、上下文协议和 base checkpoint 一致；adapter 路径按模型配置分别记录。条件不同的输出不能进入配对比较。
+
+原 `gpu-inputs-v1` 保留其旧源码状态；修正后的源码在新 `gpu-inputs-v2` 中重新做 preflight，复用同一批 75 个已准备媒体窗口。GPU 追加额度请求仍待用户答复，这些 CPU 修正不使用新 GPU Job 秒数。
