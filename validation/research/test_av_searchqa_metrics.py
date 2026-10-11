@@ -29,3 +29,20 @@ class FieldBoundaryTests(unittest.TestCase):
   trace,ref=SearchQAMetricTests().fixture();trace['final']['answer']='California, 19030'
   ref['answer_fields']=[{'field_id':'name','accepted_values':['Al']},{'field_id':'year','accepted_values':['1903']}]
   self.assertEqual(score_candidate_diagnostic(trace,ref)['requested_field_match_fraction'],0.)
+
+class PublisherFamilyMetricTests(unittest.TestCase):
+ def test_related_publisher_page_counts_as_target_discovery_and_read(self):
+  from research.av_bench.searchqa_metrics import score_candidate_diagnostic
+  trace,ref=SearchQAMetricTests().fixture();page='src_'+'b'*24
+  ref['support_quotes']=[{'source_id':page,'field_id':'maker','quote':'Otto Recke'}]
+  trace['steps'][0]['observation']['results']=[{'source_id':page}]
+  trace['steps'][1]['observation']['source_id']=page
+  result=score_candidate_diagnostic(trace,ref)
+  self.assertTrue(result['target_retrieved']);self.assertTrue(result['target_read'])
+ def test_unrelated_source_does_not_count_as_target_family(self):
+  from research.av_bench.searchqa_metrics import score_candidate_diagnostic
+  trace,ref=SearchQAMetricTests().fixture();page='src_'+'b'*24
+  trace['steps'][0]['observation']['results']=[{'source_id':page}]
+  trace['steps'][1]['observation']['source_id']=page
+  result=score_candidate_diagnostic(trace,ref)
+  self.assertFalse(result['target_retrieved']);self.assertFalse(result['target_read'])

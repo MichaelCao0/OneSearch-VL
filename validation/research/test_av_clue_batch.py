@@ -25,6 +25,12 @@ class ClueBatchTests(unittest.TestCase):
   with self.assertRaises(ValueError):m.validate_authoring_cases(cases+cases,docs,sources)
   cases[0]['end_s']=20
   with self.assertRaises(ValueError):m.validate_authoring_cases(cases,docs,sources)
+ def test_long_clue_input_is_independent_of_two_second_observer_window(self):
+  m=self.api();cases,docs,sources=self.fixture();sources[SID]['duration_s']=60.;cases[0]['start_s']=0.;cases[0]['end_s']=15.
+  refs=m.validate_authoring_cases(cases,docs,sources)
+  self.assertEqual(refs[0]['query_interval_on_parent']['end_s'],15.)
+  cases[0]['end_s']=31.
+  with self.assertRaisesRegex(ValueError,'Bounded'):m.validate_authoring_cases(cases,docs,sources)
  def test_private_answer_keys_never_enter_public_task(self):
   m=self.api();cases,_,_=self.fixture();t=m.actor_task(cases[0],'src_'+'b'*24,'corpus-dev','dev')
   self.assertEqual(t['initial_sources'],['src_'+'b'*24])

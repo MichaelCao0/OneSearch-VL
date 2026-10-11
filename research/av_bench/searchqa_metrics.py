@@ -19,12 +19,12 @@ def score_candidate_diagnostic(trace,reference):
     if not fields:raise ValueError('Require requested fields')
     final=trace['final'];answer=final.get('answer','');valid=final.get('status')=='ok' and isinstance(answer,str)
     matched={f['field_id']:bool(valid and any(field_present(v,answer) for v in f['accepted_values'])) for f in fields}
-    steps=trace['steps'];target=reference['target_source_id'];budget=trace['task']['budget_recipe'];cost=final.get('cost',{})
+    steps=trace['steps'];target=reference['target_source_id'];family={target}|{q['source_id'] for q in reference.get('support_quotes',[])};budget=trace['task']['budget_recipe'];cost=final.get('cost',{})
     return {'task_id':reference['task_id'],'status':final.get('status'),'answer_accuracy':None,'semantic_verified':False,
-      'metric_scope':'pending publisher candidate diagnostics','requested_fields':matched,
+      'metric_scope':'pending publisher candidate diagnostics','target_family_source_ids':sorted(family),'requested_fields':matched,
       'requested_field_match_fraction':sum(matched.values())/len(matched),'all_requested_fields_match':all(matched.values()),
-      'target_retrieved':any(s['action']['tool']=='search_sources' and s['observation'].get('status')=='ok' and any(r['source_id']==target for r in s['observation'].get('results',[])) for s in steps),
-      'target_read':any(s['action']['tool']=='read_text' and s['observation'].get('status')=='ok' and s['observation'].get('source_id')==target for s in steps),
+      'target_retrieved':any(s['action']['tool']=='search_sources' and s['observation'].get('status')=='ok' and any(r['source_id'] in family for r in s['observation'].get('results',[])) for s in steps),
+      'target_read':any(s['action']['tool']=='read_text' and s['observation'].get('status')=='ok' and s['observation'].get('source_id') in family for s in steps),
       'tool_attempts_in_trace':len(steps),'successful_tool_receipts':sum(s['observation'].get('status')=='ok' for s in steps),
       'tool_error_receipts':sum(s['observation'].get('status')=='tool_error' for s in steps),
       'media_preparation_receipts':sum(s['observation'].get('status')=='media_ready_observer_unavailable' for s in steps),
