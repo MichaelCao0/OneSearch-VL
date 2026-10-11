@@ -94,13 +94,15 @@ class OpenAIController:
         self.total_tokens+=body.get('usage',{}).get('total_tokens',0)
         return json.loads(body['choices'][0]['message']['content'])
 
-def run_episode(task,runtime,controller,teacher):
+def run_episode(task,runtime,controller,teacher,*,system_prompt=SYSTEM,recover_tool_errors=False):
     validate_task(task,{'corpus_id':task['corpus_id'],'split':task['split'],'source_ids':runtime.source_ids})
     tools=runtime.tool_definitions() if hasattr(runtime,'tool_definitions') else json_copy(TOOL_DEFINITIONS)
-    history=[{'role':'system','content':SYSTEM+'\nTools: '+json.dumps(tools,ensure_ascii=False,allow_nan=False)},
+    history=[{'role':'system','content':system_prompt+'\nTools: '+json.dumps(tools,ensure_ascii=False,allow_nan=False)},
              {'role':'user','content':json.dumps(task,ensure_ascii=False)}]
     steps=[];final={'status':'tool_budget_exhausted'}
-    for _ in range(task['budget_recipe']['max_tool_calls']+1):
+    for turn_index in range(task['budget_recipe']['max_tool_calls']+1):
+        if recover_tool_errors and turn_index==task['budget_recipe']['max_tool_calls']:
+            history.append({'role':'user','content':'No tool turns remain. Return your final answer now using only the actual observations already available. If insufficient, say so. Do not issue another tool call.'})
         try:decision=json_copy(controller(json_copy(history)))
         except Exception as exc:
             final={'status':'controller_failed','error_type':type(exc).__name__};break
@@ -112,7 +114,13 @@ def run_episode(task,runtime,controller,teacher):
         try:
             receipt=runtime.execute(action);step=make_step(action,receipt)
         except Exception as exc:
-            final={'status':'tool_execution_failed','error_type':type(exc).__name__};break
+            if not recover_tool_errors:
+                final={'status':'tool_execution_failed','error_type':type(exc).__name__};break
+            if not isinstance(action,dict) or set(action)!={'tool','arguments'} or action.get('tool') not in {'search_sources','inspect_av','read_text'} or not isinstance(action.get('arguments'),dict):
+                final={'status':'invalid_controller_output'};break
+            receipt={'status':'tool_error','error_type':type(exc).__name__,
+                'message':'Tool attempt failed. Check source scope, exact available AV windows, argument bounds and remaining budget. No content was observed by this failed attempt.'}
+            step=make_step(action,receipt)
         steps.append(step)
         # The controller sees only public observations; raw path/error context stays private.
         history.extend([{'role':'assistant','content':json.dumps({'action':action},ensure_ascii=False,allow_nan=False)},
@@ -120,7 +128,7 @@ def run_episode(task,runtime,controller,teacher):
     final['cost']=json_copy(runtime.cost)
     if hasattr(controller,'total_tokens'):final['cost']['controller_tokens']=controller.total_tokens
     trace={'schema_version':'av-research-trajectory.v1','task':json_copy(task),'teacher':json_copy(teacher),
-           'system':SYSTEM,'tools':tools,'steps':steps,'final':final,'execution_kind':'live_tools',
+           'system':system_prompt,'tools':tools,'steps':steps,'final':final,'execution_kind':'live_tools',
            'referenced_source_ids':[]}
     trace['referenced_source_ids']=sorted(source_ids(trace))
     return trace

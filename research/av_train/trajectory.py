@@ -29,6 +29,7 @@ def source_ids(value):
     def visit(x):
         if isinstance(x,dict):
             for k,v in x.items():
+                if k=='tools':continue  # Tool signatures are schemas, not executed source observations.
                 if k=='source_id':out.add(v)
                 elif k in {'initial_sources','ranked_sources','referenced_source_ids'} and isinstance(v,list):out.update(v)
                 else:visit(v)

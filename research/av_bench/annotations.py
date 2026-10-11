@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 from datetime import datetime
 import json
+import hashlib
 from pathlib import Path
 from .contracts import REFERENCE_VERSION,FAMILIES,json_copy,nonempty,validate_reference
 from research.av_data.build_research_batch import write_json,write_jsonl
@@ -63,6 +64,53 @@ def merge_reviews(task,sources,review_a,review_b):
             'reviewer_ids':[a['reviewer_id'],b['reviewer_id']],'modality_path':a['modality_path']}
 
 
+
+ADJUDICATION_FIELDS={'schema_version','task_id','status','adjudicator_id','submitted_at',
+                     'review_a_sha256','review_b_sha256','facts','evidence_packages',
+                     'modality_path','source_family_checked','notes'}
+
+
+def review_digest(review):
+    return hashlib.sha256(json.dumps(review,sort_keys=True,separators=(',',':'),
+                                    ensure_ascii=False,allow_nan=False).encode()).hexdigest()
+
+
+def adjudicate_reviews(task,sources,review_a,review_b,resolution):
+    """Import an explicit third review; never average boundaries or infer decisions.
+
+    Source replay, reviewer independence and identities require human evidence.
+    This function validates coordinates, exact input identities and provenance.
+    """
+    a=validate_review(review_a,task);b=validate_review(review_b,task)
+    if a['family']!=b['family']:raise ValueError('Review family disagreement requires task reauthoring')
+    base=merge_reviews(task,sources,a,b)
+    if base['status']!='needs_adjudication':raise ValueError('Adjudication requires an unresolved review difference')
+    r=json_copy(resolution)
+    if (not isinstance(r,dict) or set(r)!=ADJUDICATION_FIELDS or
+            r['schema_version']!='av-researchbench.adjudication.v1' or
+            r['task_id']!=task['task_id'] or r['status']!='submitted'):
+        raise ValueError('Explicit submitted adjudication required')
+    if r['review_a_sha256']!=review_digest(a) or r['review_b_sha256']!=review_digest(b):
+        raise ValueError('Adjudication original review hash mismatch')
+    adjudicator=nonempty(r['adjudicator_id'],'adjudicator_id')
+    if adjudicator in (a['reviewer_id'],b['reviewer_id']):raise ValueError('Independent third adjudicator required')
+    # Reuse completion, timezone, modality and source-review validation.
+    submitted={'schema_version':'av-researchbench.review.v1','reviewer_id':adjudicator,
+               'submitted_at':r['submitted_at'],'status':'submitted','task_id':task['task_id'],
+               'family':a['family'],'facts':r['facts'],'evidence_packages':r['evidence_packages'],
+               'source_family_checked':r['source_family_checked'],'modality_path':r['modality_path'],
+               'notes':r['notes']}
+    validate_review(submitted,task)
+    ref={'schema_version':REFERENCE_VERSION,'task_id':task['task_id'],'status':'adjudicated',
+         'reviewer_ids':[a['reviewer_id'],b['reviewer_id'],adjudicator],'family':a['family'],
+         'facts':r['facts'],'evidence_packages':r['evidence_packages']}
+    validate_reference(ref,task,sources)
+    return {'status':'adjudicated','task_id':task['task_id'],'reference':ref,
+            'reviewer_ids':ref['reviewer_ids'],'modality_path':r['modality_path'],
+            'review_a_sha256':review_digest(a),'review_b_sha256':review_digest(b),
+            'adjudication_sha256':review_digest(r),'resolution_notes':r['notes']}
+
+
 def prepare_review_packets(batch_dir,out_dir):
     root=Path(batch_dir);out=Path(out_dir)
     if out.exists():raise FileExistsError(out)
@@ -95,7 +143,7 @@ reference. Disagreement stays needs_adjudication; no silent averaging of times.
     return summary
 
 
-def import_batch_reviews(batch_dir,reviews_dir,out_dir):
+def import_batch_reviews(batch_dir,reviews_dir,out_dir,adjudications_dir=None):
     root=Path(batch_dir);reviews=Path(reviews_dir);out=Path(out_dir)
     if out.exists():raise FileExistsError(out)
     rows=json.loads((root/'case-authoring.private.json').read_text())
@@ -108,7 +156,14 @@ def import_batch_reviews(batch_dir,reviews_dir,out_dir):
         a,b=(json.loads(p.read_text()) for p in paths)
         if any(r.get('status')!='submitted' for r in (a,b)):
             decisions.append({'task_id':tid,'status':'pending_review'});continue
-        decision=merge_reviews(row['task'],sources,a,b);decisions.append(decision)
+        if a['family']!=row['family'] or b['family']!=row['family']:
+            raise ValueError('Review family differs from authored task')
+        decision=merge_reviews(row['task'],sources,a,b)
+        if decision['status']=='needs_adjudication' and adjudications_dir is not None:
+            resolution_path=Path(adjudications_dir)/(tid+'.json')
+            if resolution_path.is_file():
+                decision=adjudicate_reviews(row['task'],sources,a,b,json.loads(resolution_path.read_text()))
+        decisions.append(decision)
         if decision['reference'] is not None:refs.append(decision['reference'])
     out.mkdir(parents=True,exist_ok=False)
     write_jsonl(out/'references.private.jsonl',refs);write_json(out/'decisions.private.json',decisions)
@@ -121,9 +176,9 @@ def import_batch_reviews(batch_dir,reviews_dir,out_dir):
 
 def main():
     p=argparse.ArgumentParser(description=__doc__);p.add_argument('action',choices=['prepare','import'])
-    p.add_argument('--batch-dir',required=True);p.add_argument('--out-dir',required=True);p.add_argument('--reviews-dir')
+    p.add_argument('--batch-dir',required=True);p.add_argument('--out-dir',required=True);p.add_argument('--reviews-dir');p.add_argument('--adjudications-dir')
     a=p.parse_args()
     if a.action=='import' and not a.reviews_dir:p.error('--reviews-dir required for import')
-    result=prepare_review_packets(a.batch_dir,a.out_dir) if a.action=='prepare' else import_batch_reviews(a.batch_dir,a.reviews_dir,a.out_dir)
+    result=prepare_review_packets(a.batch_dir,a.out_dir) if a.action=='prepare' else import_batch_reviews(a.batch_dir,a.reviews_dir,a.out_dir,a.adjudications_dir)
     print(json.dumps(result,ensure_ascii=False,indent=2))
 if __name__=='__main__':main()

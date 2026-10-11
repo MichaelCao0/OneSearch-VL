@@ -22,9 +22,9 @@
 
 ## 开发范围
 
-第一篇只做多源 Audio-Video search、证据核验和研究报告。Search for Generation 留作下一篇。
+2026-10-11 用户明确收敛范围：第一篇沿用 OneSearch-VL 的搜索问答范式，扩展音视频线索与检查能力；来源数量由问题决定，不强制跨来源比较或研究报告。Search for Generation 留作下一篇。
 
-先读 `docs/research/AV-DeepResearch-Research-Plan-v2-2026-10-09.md` 及 codebase audit；v1 保留历史版本，v2 是当前研究依据。
+当前任务范围以 `docs/research/OneSearch-AV-Research-Proposal-v3-SearchQA-2026-10-11.md` 为准；此前 proposal 和 codebase audit 保留历史依据。Benchmark gold 严格人审，但不阻止明确标为探索的真实 rollout 与 silver 数据候选采集。
 原始代码会丢弃音频，grid clock 不能直接当 source clock；原始时间映射、冻结 metadata corpus、严格任务隔离与 media-only receipts 已实现；语义 AV observer、可修订证据账本、同前缀分支 runner 和 GCR scorer 仍待实现。
 
 不得把 gold graph、答案、来源路径或未来 observation 提供给 actor。预测后果不能直接成为引用。转载不等于独立证据。
