@@ -33,9 +33,17 @@ Qwen2.5-Omni-7B 的固定 revision 为 `ae9e1690543ffd5c0221dc27f79834d0294cba00
 
 ## 下一阶段
 
-- 已生成 6 道约 12 秒的长输入 train 候选；development 16 道长输入正在构建。蒸汽机需另行改用清晰区间，旧版 0–12 秒长输入不得直接作为已验收样本。
+- 已完成 16 道长输入 development 和 6 道 train 候选。Development 实际 9.386–12.001 秒；机械/音乐 train 约 12 秒，降雨 train 为完整 5.445 秒。蒸汽机正式输入已改为原片 8–20 秒。22 个查询文件完成哈希/轨道核对；train/dev 的原始文件、来源 family 和裁剪文件交集均为 0。近重复语义 family 与人工审核仍待完成。
 - 采集更有辨识度的多窗口 AV 观察，保留模型原始输出。
 - 收集首批 64 条有效训练轨迹，再进行相同基座的 Answer-only SFT / Trajectory SFT 对比。
 - 正式评测答案正确率、来源召回、工具合法率、完成率和推理成本；用音频/视频消融确认声音是否带来提升。
 
 主要远端证据：`research/runs/av-anonymous-teacher-20261012-v1/`；长片段修订：`research/runs/av-clue-searchqa-20261012-v1/`。本研究仍在执行，独立 test split、正式 gold 与有效性能提升尚未完成。
+
+## 发布与验证
+
+代码已推送到 MichaelCao0/OneSearch-VL 的 research/av-deepresearch，commit 8299e23416f4445f6a00de9ed7974ad52787d650。275 项 research 测试通过。审核页 JavaScript 通过 Node 语法检查；34 个预览媒体文件均保留音视频轨道，40 个预览资源 HEAD 请求成功，首题更新后的 WebM Range 请求返回 206。
+
+审核入口：http://127.0.0.1:8781/OneSearch-AV-Context-Review-2026-10-12/review/index.html 。旧入口也已更新，旧版页面保存在 index-pilot-v1.html。浏览器实际播放仍待复验。
+
+最终长输入 development 版本：`research/runs/av-clue-searchqa-20261012-v1/development-context-final-v3`；train：`research/runs/av-clue-searchqa-20261012-v1/train-context-v2`。审核页默认提供更宽的约 9–15 秒上下文，并分别标注当前模型输入时长，避免混淆。
