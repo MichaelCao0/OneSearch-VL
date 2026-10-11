@@ -262,10 +262,15 @@ class SearchQARuntime(ToolRuntime):
 def make_parser():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--batch-dir',required=True);p.add_argument('--checkpoint',required=True)
-    p.add_argument('--observer-smoke-dir',required=True);p.add_argument('--out-dir',required=True)
+    p.add_argument('--observer-smoke-dir');p.add_argument('--observer-mode',choices=['replay','media','native'],default='replay');p.add_argument('--out-dir',required=True)
     p.add_argument('--max-tasks',type=int,default=3);p.add_argument('--task-id',action='append')
     p.add_argument('--max-new-tokens',type=int,default=384);p.add_argument('--index-dir')
     p.add_argument('--controller-kind',choices=['onesearch','omni'],default='onesearch');p.add_argument('--controller-model-manifest')
+    p.add_argument('--observer-model-manifest');p.add_argument('--observer-code-revision')
+    p.add_argument('--observer-runtime-manifest');p.add_argument('--observer-runtime-lock')
+    p.add_argument('--observer-device',default='cuda:0')
+    p.add_argument('--clue-bindings',help='Private anonymous query-clip bindings; publisher lookup requires search')
+    p.add_argument('--protocol',choices=['native','canonical'],default='native')
     p.add_argument('--guided-curriculum',action='store_true',help='Authored initial-source tool recipe plus actual model answer; not autonomous teacher actions')
     return p
 
@@ -310,20 +315,46 @@ def run_guided_curriculum(task,runtime,controller,*,compact_canonical=False):
 
 def main():
     a=make_parser().parse_args()
+    if a.clue_bindings and a.guided_curriculum:raise ValueError('Anonymous query clues cannot use title-assisted guided curriculum')
+    if a.guided_curriculum and a.observer_mode!='replay':raise ValueError('Guided curriculum requires fixed executed observer records')
     if a.controller_kind=='omni' and not a.controller_model_manifest:raise ValueError('Pinned Omni teacher manifest required')
     out=Path(a.out_dir);out.mkdir(parents=True,exist_ok=False)
     batch=Path(a.batch_dir);index=Path(a.index_dir) if a.index_dir else batch/'corpus';load_frozen(index);sources={r['source_id']:r for r in map(json.loads,(batch/'sources.private.jsonl').read_text().splitlines())}
     tasks=list(map(json.loads,(batch/'tasks-public.jsonl').read_text().splitlines()))
     if a.task_id:tasks=[t for t in tasks if t['task_id'] in a.task_id]
     tasks=tasks[:a.max_tasks]
-    observer=SmokeObserverReplay(a.observer_smoke_dir)
-    controller=(LocalOmniController(a.controller_model_manifest,out/'controller-generations',a.max_new_tokens) if a.controller_kind=='omni' else LocalController(a.checkpoint,out/'controller-generations',a.max_new_tokens))
+    if a.observer_mode=='replay' and not a.observer_smoke_dir:raise ValueError('Replay observer requires an executed smoke directory')
+    if a.observer_mode=='media' and a.observer_smoke_dir:raise ValueError('Media-only mode cannot ignore supplied replay directory')
+    if a.observer_mode=='media' and a.guided_curriculum:raise ValueError('Guided curriculum requires executed observer records')
+    native_fields=(a.observer_model_manifest,a.observer_code_revision,a.observer_runtime_manifest,a.observer_runtime_lock)
+    if a.observer_mode!='native' and any(native_fields):raise ValueError('Native configuration cannot be ignored by another observer mode')
+    if a.observer_mode=='native':
+        if a.observer_smoke_dir or not all(native_fields):raise ValueError('Dynamic observer requires complete pinned native configuration')
+        from types import SimpleNamespace
+        from .rollout import build_observer
+        observer=build_observer(SimpleNamespace(observer_mode='native',observer_model_manifest=a.observer_model_manifest,observer_code_revision=a.observer_code_revision,observer_runtime_manifest=a.observer_runtime_manifest,observer_runtime_lock=a.observer_runtime_lock,observer_device=a.observer_device,observer_execution_dir=[],observer_backend_identity=None),out)
+    else:
+        observer=SmokeObserverReplay(a.observer_smoke_dir) if a.observer_mode=='replay' else None
+    controller=(LocalOmniController(a.controller_model_manifest,out/'controller-generations',a.max_new_tokens,protocol=a.protocol) if a.controller_kind=='omni' else LocalController(a.checkpoint,out/'controller-generations',a.max_new_tokens,protocol=a.protocol))
     summaries=[]
+    bindings=json.loads(Path(a.clue_bindings).read_text()) if a.clue_bindings else None
+    controller.identity.update({'protocol':a.protocol,'observer_mode':a.observer_mode,
+      'input_mode':{'replay':'text_with_fixed_av_observations','media':'text_with_media_preparation_receipts_no_semantic_observer','native':'text_with_dynamic_av_observations'}[a.observer_mode],
+      'input_profile':'anonymous_query_clip' if bindings is not None else 'source_visible_pilot'})
+    system_prompt=QA_SYSTEM if a.protocol=='canonical' else NATIVE_SYSTEM
+    if bindings is not None:
+        from .clue_searchqa import CLUE_SYSTEM
+        system_prompt+='\n'+CLUE_SYSTEM
     for task in tasks:
         before_calls=controller.calls;before_tokens=controller.total_tokens
         scope=json.loads((batch/'scope.json').read_text())
-        runtime=SearchQARuntime(index,scope,sources,out/task['task_id']/'tools',task['budget_recipe'],observer)
-        trace=(run_guided_curriculum(task,runtime,controller) if a.guided_curriculum else run_episode(task,runtime,controller,controller.identity,system_prompt=NATIVE_SYSTEM,recover_tool_errors=True))
+        if bindings is not None:
+            from .clue_searchqa import ClueSearchQARuntime
+            selected=[b for b in bindings if b['clue_id'] in task['initial_sources']]
+            runtime=ClueSearchQARuntime(index,scope,sources,selected,out/task['task_id']/'tools',task['budget_recipe'],observer)
+        else:
+            runtime=SearchQARuntime(index,scope,sources,out/task['task_id']/'tools',task['budget_recipe'],observer)
+        trace=(run_guided_curriculum(task,runtime,controller,compact_canonical=a.protocol=='canonical') if a.guided_curriculum else run_episode(task,runtime,controller,controller.identity,system_prompt=system_prompt,recover_tool_errors=True))
         trace['final']['cost']['episode_controller_tokens']=controller.total_tokens-before_tokens
         write_json(out/task['task_id']/'trace.private.json',trace)
         summary={'task_id':task['task_id'],'status':trace['final'].get('status'),'answer':trace['final'].get('answer'),
@@ -331,7 +362,7 @@ def main():
           'observer_cache_reads':runtime.cost.get('observer_cache_reads',0),'semantic_verified':False,'retained_sft_rows':0}
         summaries.append(summary);write_episode_summary(out,summary);print(json.dumps(summary,ensure_ascii=False),flush=True)
     write_json(out/'summary.json',{'schema_version':'av-searchqa-bootstrap-run.v1','controller':controller.identity,
-      'observer_mode':'fixed_executed_replay','attempted_tasks':len(summaries),'model_decisions':controller.calls,
+      'observer_mode':{'replay':'fixed_executed_replay','media':'media_ready_observer_unavailable','native':'dynamic_native_av'}[a.observer_mode],'attempted_tasks':len(summaries),'model_decisions':controller.calls,
       'answer_submission_count':sum(s['status']=='ok' and bool(s['answer']) for s in summaries),
       'episodes':summaries,'semantic_verified_count':0,'retained_sft_rows':0,'optimizer_updates':0})
 
