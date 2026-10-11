@@ -136,9 +136,16 @@ def native_history(history):
     return output
 
 
+def controller_history(history,protocol):
+    if protocol=='canonical':return json_copy(history)
+    if protocol=='native':return native_history(history)
+    raise ValueError('Unknown controller protocol')
+
+
 class LocalController:
     """Published visual controller acting on text from a fixed AV observer."""
-    def __init__(self,checkpoint,out_dir,max_new_tokens=384):
+    def __init__(self,checkpoint,out_dir,max_new_tokens=384,protocol="native"):
+        controller_history([],protocol);self.protocol=protocol
         import torch
         from transformers import AutoTokenizer,Qwen3VLForConditionalGeneration,StoppingCriteria,StoppingCriteriaList
         checkpoint=Path(checkpoint);receipt=json.loads((checkpoint/'download-receipt.json').read_text())
@@ -155,14 +162,14 @@ class LocalController:
         self.max_new_tokens=max_new_tokens;self.total_tokens=0;self.calls=0;self.torch=torch
         self.stopping_base=StoppingCriteria;self.stopping_list=StoppingCriteriaList
     def __call__(self,history):
-        text=self.tokenizer.apply_chat_template(native_history(history),tokenize=False,add_generation_prompt=True)
+        text=self.tokenizer.apply_chat_template(controller_history(history,self.protocol),tokenize=False,add_generation_prompt=True)
         inputs=self.tokenizer(text,return_tensors='pt').to('cuda:0')
         if inputs['input_ids'].shape[1]>12000:raise ValueError('Controller context budget exceeded')
         start=time.monotonic()
-        tokenizer=self.tokenizer;prefix_len=inputs['input_ids'].shape[1]
+        protocol=self.protocol;tokenizer=self.tokenizer;prefix_len=inputs['input_ids'].shape[1]
         class OneDecisionStop(self.stopping_base):
             def __call__(self,input_ids,scores,**kwargs):
-                return native_decision_is_complete(tokenizer.decode(input_ids[0,prefix_len:],skip_special_tokens=True))
+                return (decision_is_complete if protocol=="canonical" else native_decision_is_complete)(tokenizer.decode(input_ids[0,prefix_len:],skip_special_tokens=True))
         with self.torch.inference_mode():
             tokens=self.model.generate(**inputs,max_new_tokens=self.max_new_tokens,do_sample=False,use_cache=True,
                 stopping_criteria=self.stopping_list([OneDecisionStop()]))
@@ -170,11 +177,12 @@ class LocalController:
         self.calls+=1;self.total_tokens+=tokens.shape[1]
         write_json(self.out/f'{self.calls:04d}.private.json',{'raw_output':raw,'input_tokens':inputs['input_ids'].shape[1],
             'generated_tokens':tokens.shape[1]-inputs['input_ids'].shape[1],'wall_seconds':time.monotonic()-start})
-        return parse_native_decision(raw)
+        return (parse_decision if self.protocol=="canonical" else parse_native_decision)(raw)
 
 
 class LocalOmniController(LocalController):
-    def __init__(self,manifest,out_dir,max_new_tokens=384):
+    def __init__(self,manifest,out_dir,max_new_tokens=384,protocol="native"):
+        controller_history([],protocol);self.protocol=protocol
         import torch
         from transformers import AutoTokenizer,Qwen2_5OmniForConditionalGeneration,StoppingCriteria,StoppingCriteriaList
         from research.av_agent.qwen_omni_backend import _verified_snapshot
@@ -262,7 +270,7 @@ def make_parser():
     return p
 
 
-def run_guided_curriculum(task,runtime,controller):
+def run_guided_curriculum(task,runtime,controller,*,compact_canonical=False):
     from .trajectory import make_step,source_ids
     from .export import public_observation
     if len(task['initial_sources'])!=1:raise ValueError('Guided seed requires one initial source')
@@ -277,7 +285,8 @@ def run_guided_curriculum(task,runtime,controller):
     actions=[{'tool':'inspect_av','arguments':windows[0]},
              {'tool':'search_sources','arguments':{'query':query,'top_k':3}},
              {'tool':'read_text','arguments':{'source_id':sid,'start_char':0,'end_char':min(4000,len(initial_doc['text']))}}]
-    steps=[];history=[{'role':'system','content':NATIVE_SYSTEM+'\nTools: '+json.dumps(runtime.tool_definitions(),ensure_ascii=False)},
+    system=QA_SYSTEM if compact_canonical else NATIVE_SYSTEM
+    steps=[];history=[{'role':'system','content':system+'\nTools: '+json.dumps(runtime.tool_definitions(),ensure_ascii=False)},
                      {'role':'user','content':json.dumps(task,ensure_ascii=False)}]
     for action in actions:
         receipt=runtime.execute(action)
@@ -286,12 +295,14 @@ def run_guided_curriculum(task,runtime,controller):
         history.extend([{'role':'assistant','content':json.dumps({'action':action},ensure_ascii=False)},
             {'role':'user','content':'<tool_response>\n'+json.dumps(public_observation(receipt),ensure_ascii=False)+'\n</tool_response>'}])
     history.append({'role':'user','content':'The initial-source inspection, title-assisted search and publisher text read have now actually executed. Answer the original question directly using the observed publisher description. Preserve proper names, dates and model numbers exactly as written in that text. This is the final turn: return only <answer>your answer</answer>, no further tool calls. If uncertain, say so.'})
+    if compact_canonical:
+        history[-1]['content']='Final turn. Answer the original question in ONE concise English sentence, preserving publisher proper names exactly. Return only a complete JSON object: {"final":{"status":"ok","answer":"...","evidence":[]}}. No tools, reasoning or repeated sentences. If the requested field is missing, use status insufficient_evidence.'
     try:decision=controller(history);final=decision.get('final',{'status':'no_final_answer'})
     except Exception as exc:final={'status':'controller_failed','error_type':type(exc).__name__}
     identity=json_copy(controller.identity);identity['trajectory_origin']='authored_tool_curriculum_with_actual_model_final'
     identity['assistance']='public_publisher_title_lookup; not autonomous source discovery'
     trace={'schema_version':'av-research-trajectory.v1','task':json_copy(task),'teacher':identity,
-      'system':NATIVE_SYSTEM,'tools':runtime.tool_definitions(),'steps':steps,'final':final,
+      'system':system,'tools':runtime.tool_definitions(),'steps':steps,'final':final,
       'execution_kind':'live_tools','referenced_source_ids':[]}
     trace['referenced_source_ids']=sorted(source_ids(trace));final['cost']=json_copy(runtime.cost)
     return trace
