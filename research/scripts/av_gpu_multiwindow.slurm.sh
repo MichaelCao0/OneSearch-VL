@@ -12,7 +12,7 @@ umask 077
 cd /home/jovyan/OneSearch-VL
 AV_RUN=research/runs/av-multiwindow-20261012-v1
 export AV_RUN
-AV_INPUTS="$AV_RUN/gpu-inputs-v2"
+AV_INPUTS="$AV_RUN/gpu-inputs-v3"
 export AV_INPUTS
 AV_STAGE="${1:?observe, teacher, train, or evaluate required}"
 case "$AV_STAGE" in observe) AV_LIMIT=900;; teacher) AV_LIMIT=1200;; train) AV_LIMIT=600;; evaluate) AV_LIMIT=900;; *) exit 2;; esac

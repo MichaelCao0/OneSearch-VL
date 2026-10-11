@@ -47,7 +47,7 @@ Controller 起点为发布的 OneSearch-VL-8B，revision `2623603767b9fef7bab05a
 CPU preflight（全部窗口准备完之后，在 sft-gpu Pixi 环境执行）:
 
 ```bash
-pixi run --locked --manifest-path runtime/sft-gpu/pixi.toml python -m research.av_train.multiwindow_preflight --run-dir research/runs/av-multiwindow-20261012-v1 --output-name gpu-inputs-v2
+pixi run --locked --manifest-path runtime/sft-gpu/pixi.toml python -m research.av_train.multiwindow_preflight --run-dir research/runs/av-multiwindow-20261012-v1 --output-name gpu-inputs-v3
 ```
 
 GPU 脚本、preflight 和采集/训练/评测 CLI 已准备；CPU 检查不等于它们已在 GPU 完整运行。
@@ -68,3 +68,20 @@ GPU 脚本、preflight 和采集/训练/评测 CLI 已准备；CPU 检查不等�
 对照汇总同时要求任务、媒体绑定、observer 目录、采样设置、工具预算、生成上限、上下文协议和 base checkpoint 一致；adapter 路径按模型配置分别记录。条件不同的输出不能进入配对比较。
 
 原 `gpu-inputs-v1` 保留其旧源码状态；修正后的源码在新 `gpu-inputs-v2` 中重新做 preflight，复用同一批 75 个已准备媒体窗口。GPU 追加额度请求仍待用户答复，这些 CPU 修正不使用新 GPU Job 秒数。
+
+
+## 审核记录与参考答案导入
+
+训练和 development 审核页均增加独立的“答案核实”选项，保留此前题目、声音和搜索必要性判断。保留题目不等于答案已确认。新版草稿使用 `av-searchqa-authoring-review-draft.v2`，同时携带任务与候选答案文件 SHA-256；浏览器草稿按两个版本标识隔离，旧记录可迁移，但缺失的答案判断仍为 pending。
+
+导入命令（仅在取得真实审核记录后执行）：
+
+```bash
+pixi run --locked python -m research.av_bench.qa_review --batch-dir research/runs/av-clue-searchqa-20261012-v1/development-context-final-v3 --review-file /path/to/downloaded-human-review.json --out-dir research/runs/av-human-review-YYYYMMDD-v1
+```
+
+训练集导入时将 `--batch-dir` 改为 `research/runs/av-multiwindow-20261012-v1/train21-v2`。输出为私有 `references.private.jsonl`、完整审核决定及 summary；只将 keep、答案 supported、任务维度已判断的题目标为 human_reviewed。待审、需要改题、需要修正答案和拒绝项分别保留。此导入不发布数据，也不宣告已经建立独立 test split。
+
+实际冻结支持文本已重新检查：训练 21 个候选对应 38 条原文引用；development 16 个候选对应 33 条引用。每个所问字段都有支持文本，字符区间与冻结来源完全一致。实际导入人工记录仍为 0，这些检查不是语义审核。
+
+本次代码更新后在新 `gpu-inputs-v3` 中重新冻结运行前检查；旧 v1/v2 产物均保留。新增审核步骤不使用 GPU 秒数。追加计算请求仍待答复。
