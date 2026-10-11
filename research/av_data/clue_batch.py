@@ -83,13 +83,19 @@ def build_clue_batch(pool_dir,train_registry,cases,out_dir):
     if shared_bytes or shared_origins:raise ValueError('Train/dev asset or origin family overlap')
     references=validate_authoring_cases(cases,docs,sources)
     out.mkdir(parents=True,exist_ok=False);shutil.copytree(corpus,out/'corpus')
-    tasks=[];bindings=[];lineage=[];clue_public=[]
+    tasks=[];bindings=[];lineage=[];clue_public=[];crop_cache={}
     for case in cases:
         parent=sources[case['target_source_id']]
-        derived=clip_media(parent,case['start_s'],case['end_s'],out/'query-derived'/case['task_id'])
+        crop_key=(parent['asset_sha256'],case['start_s'],case['end_s'])
+        if crop_key not in crop_cache:
+            derived=clip_media(parent,case['start_s'],case['end_s'],out/'query-derived'/case['task_id'])
+            clue_source=ingest_media(derived['output_path'],'https://query.invalid/anonymous',out/'query-assets',{},
+                rights_basis=parent['rights_basis'],redistribution_scope=parent['redistribution_scope'])
+            crop_cache[crop_key]=(derived,clue_source)
+        else:
+            derived,clue_source=crop_cache[crop_key]
+        (out/'query-derived'/case['task_id']).mkdir(parents=True,exist_ok=True)
         write_json(out/'query-derived'/case['task_id']/'derivation.private.json',derived)
-        clue_source=ingest_media(derived['output_path'],'https://query.invalid/anonymous',out/'query-assets',{},
-            rights_basis=parent['rights_basis'],redistribution_scope=parent['redistribution_scope'])
         if clue_source['media_type']!='audio_video':raise ValueError('Query must retain timed audio and video')
         clue_id='src_'+secrets.token_hex(12)
         while clue_id in sources or any(b['clue_id']==clue_id for b in bindings):clue_id='src_'+secrets.token_hex(12)
@@ -105,7 +111,7 @@ def build_clue_batch(pool_dir,train_registry,cases,out_dir):
     write_json(out/'source-family-audit.private.json',{'same_bytes_train_dev':len(shared_bytes),'same_origin_train_dev':len(shared_origins),
       'grouping':'original publisher origin, including its HTML and AV derivatives','near_duplicate_family_review':'pending',
       'family_count':len({l['family_id'] for l in lineage}),'train_registry_sha256':sha256_file(train_registry)})
-    summary={'schema_version':'av-anonymous-clue-batch.v1','split':split,'tasks':len(tasks),'query_clips':len(bindings),
+    summary={'schema_version':'av-anonymous-clue-batch.v1','split':split,'tasks':len(tasks),'query_clips':len(bindings),'unique_query_assets':len(crop_cache),
       'parent_recordings':len({l['parent_source_id'] for l in lineage}),'indexed_av_sources':sum(s['media_type']=='audio_video' for s in sources.values()),
       'indexed_webpages':sum(s['media_type']=='webpage' for s in sources.values()),'benchmark_gold':0,'semantic_review_status':'pending',
       'profile':'direct_audio_video_search_qa','initial_target_id_shared':False,'initial_publisher_metadata_shared':False,

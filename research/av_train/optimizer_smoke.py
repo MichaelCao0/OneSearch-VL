@@ -33,8 +33,11 @@ def parameter_digest(model):
 def main():
     p=argparse.ArgumentParser(description=__doc__);p.add_argument('--rows',required=True);p.add_argument('--out-dir',required=True)
     p.add_argument('--checkpoint',default='repro/assets/model-8b');p.add_argument('--steps',type=int,default=4)
+    p.add_argument('--supervision',choices=['trajectory','answer_only'],default='trajectory')
+    p.add_argument('--dataset-quality',choices=['silver_assisted_curriculum','silver_anonymous_publisher_fields'],default='silver_assisted_curriculum')
+    p.add_argument('--notes')
     a=p.parse_args()
-    if not 1<=a.steps<=8:raise ValueError('Bounded optimizer step count required')
+    if not 1<=a.steps<=128:raise ValueError('Bounded optimizer step count required')
     import torch
     from transformers import Qwen3VLForConditionalGeneration
     from peft import LoraConfig,get_peft_model,PeftModel
@@ -43,13 +46,21 @@ def main():
     from research.av_data.media_clock import sha256_file
     out=Path(a.out_dir);out.mkdir(parents=True,exist_ok=False)
     rows=json.loads(Path(a.rows).read_text())
+    if not rows:raise ValueError('At least one retained training row required')
+    if a.dataset_quality=='silver_anonymous_publisher_fields':
+        from research.av_train.trajectory import digest
+        if not a.notes:raise ValueError('Anonymous rows require aligned retention notes')
+        notes=json.loads(Path(a.notes).read_text())
+        if len(notes)!=len(rows) or any(n.get('row_sha256')!=digest(r) or n.get('quality_label')!=a.dataset_quality or n.get('authored_assistant_targets')!=0 for r,n in zip(rows,notes)):raise ValueError('Retention notes do not match anonymous rows')
     report=audit_rows(rows,a.checkpoint,cutoff_len=8192)
     write_json(out/'native-label-audit.private.json',report)
     converter,_,processor,_=native_components(a.checkpoint,8192)
     batches=[]
-    for row in rows:
+    from research.av_train.supervision import apply_supervision
+    for row_index,row in enumerate(rows):
         aligned=converter(row)
         ids,labels=processor._encode_data_example(aligned['_prompt'],aligned['_response'],aligned['_system'],aligned['_tools'],[],[],[])
+        labels=apply_supervision(labels,report['rows'][row_index]['pairs'],a.supervision)
         batches.append({'input_ids':torch.tensor([ids],device='cuda:0'),
            'labels':torch.tensor([labels],device='cuda:0'),'attention_mask':torch.ones((1,len(ids)),dtype=torch.long,device='cuda:0')})
     receipt=json.loads((Path(a.checkpoint)/'download-receipt.json').read_text())
@@ -75,8 +86,8 @@ def main():
       'cuda_rng':torch.cuda.get_rng_state_all(),'global_step':a.steps},checkpoint/'training_state.pt')
     base=model.unload();reloaded=PeftModel.from_pretrained(base,checkpoint,is_trainable=True)
     reload_digest=parameter_digest(reloaded);assert reload_digest==final,'Adapter reload mismatch'
-    summary={'schema_version':'onesearch-av-lora-engineering-smoke.v1','status':'passed','dataset_quality':'silver_assisted_curriculum',
-      'row_count':len(rows),'optimizer_updates':len(updates),'updates':updates,'training_wall_seconds':time.monotonic()-start,
+    summary={'schema_version':'onesearch-av-lora-engineering-smoke.v1','status':'passed','dataset_quality':a.dataset_quality,
+      'row_count':len(rows),'supervision':a.supervision,'fixed_input_order':True,'total_supervised_tokens':sum(x['supervised_tokens'] for x in updates),'optimizer_updates':len(updates),'updates':updates,'training_wall_seconds':time.monotonic()-start,
       'initial_trainable_sha256':initial,'final_trainable_sha256':final,'reload_trainable_sha256':reload_digest,
       'adapter_reload_verified':True,'optimizer_scheduler_rng_saved':True,'base_model_revision':receipt['revision'],
       'rows_sha256':sha256_file(a.rows),'lora_target_parameter_names':names,'performance_comparison_run':False,

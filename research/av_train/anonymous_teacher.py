@@ -18,6 +18,8 @@ from .trajectory import validate_trace,digest
 
 ASSISTANCE='one authored query-clip inspect; model decides all subsequent search/read/final turns; no title or reference fields supplied'
 ORIGIN='authored_input_inspect_with_model_decided_search_qa'
+MULTI_ASSISTANCE='three authored query-clip window inspections; model decides search/read/final; no publisher clues supplied'
+MULTI_ORIGIN='authored_multiwindow_input_with_model_decided_search_qa'
 TEACHER_SYSTEM=QA_SYSTEM+'\n'+CLUE_SYSTEM+'''\nThe first input-clip observation is prepared for you. Search using SHORT English or source-language object/sound keywords from that observation. Query terms may match descriptions in French as well as English. Read a discovered relevant source using the returned quote_start and quote_end; do not inspect the input again. Once the requested attributes are available, answer in ONE concise English sentence, preserving publisher proper names exactly. Return ONE complete JSON decision, no reasoning or imagined observations.'''
 
 class InitialInspectionController:
@@ -31,27 +33,37 @@ class InitialInspectionController:
             return {'action':{'tool':'inspect_av','arguments':{'source_id':self.clue_id,'start_s':0.,'end_s':self.duration}}}
         return self.controller(history)
 
-def anonymous_silver_row(trace,source_splits,required_terms):
+def anonymous_silver_row(trace,source_splits,required_terms,*,initial_observation_count=1):
     t=validate_trace(trace,source_splits)
-    if t['teacher'].get('assistance')!=ASSISTANCE or t['teacher'].get('trajectory_origin')!=ORIGIN:raise ValueError('Explicit assistance identity required')
+    if isinstance(initial_observation_count,bool) or initial_observation_count not in (1,3):raise ValueError('One or three initial observations required')
+    expected=(ASSISTANCE,ORIGIN) if initial_observation_count==1 else (MULTI_ASSISTANCE,MULTI_ORIGIN)
+    if (t['teacher'].get('assistance'),t['teacher'].get('trajectory_origin'))!=expected:raise ValueError('Explicit assistance identity required')
     if not required_terms or any(not isinstance(x,str) or not x.strip() for x in required_terms):raise ValueError('Required publisher fields needed')
     answer=t['final'].get('answer','')
     if not isinstance(answer,str) or not all(field_present(x,answer) for x in required_terms):raise ValueError('Requested fields missing from answer')
-    first=t['steps'][0];obs=first['observation']
-    if first['action']['tool']!='inspect_av' or first['action']['arguments']['source_id'] not in t['task']['initial_sources'] or obs.get('status')!='ok' or obs.get('model_executed') is not True:raise ValueError('Executed input observation required')
-    successful_reads=[s['observation'].get('quote',{}).get('text','') for s in t['steps'][1:] if s['action']['tool']=='read_text' and s['observation'].get('status')=='ok']
+    initial_steps=t['steps'][:initial_observation_count]
+    if len(initial_steps)!=initial_observation_count:raise ValueError('Missing initial observations')
+    windows=set()
+    for first in initial_steps:
+        obs=first['observation'];args=first['action']['arguments']
+        if first['action']['tool']!='inspect_av' or args['source_id'] not in t['task']['initial_sources'] or obs.get('status')!='ok' or obs.get('model_executed') is not True:raise ValueError('Executed input observation required')
+        key=(args['source_id'],args['start_s'],args['end_s'])
+        if key in windows:raise ValueError('Duplicate initial observation')
+        windows.add(key)
+    successful_reads=[s['observation'].get('quote',{}).get('text','') for s in t['steps'][initial_observation_count:] if s['action']['tool']=='read_text' and s['observation'].get('status')=='ok']
     if not any(all(field_present(x,text) for x in required_terms) for text in successful_reads):raise ValueError('Requested fields require an actual successful text read')
-    if not any(s['action']['tool']=='search_sources' and s['observation'].get('status')=='ok' and s['observation'].get('results') for s in t['steps'][1:]):raise ValueError('Actual source discovery required')
-    initial={'task':t['task'],'initial_av_observation':public_observation(obs)}
+    if not any(s['action']['tool']=='search_sources' and s['observation'].get('status')=='ok' and s['observation'].get('results') for s in t['steps'][initial_observation_count:]):raise ValueError('Actual source discovery required')
+    initial={'task':t['task']}
+    initial['initial_av_observation' if initial_observation_count==1 else 'initial_av_observations']=(public_observation(initial_steps[0]['observation']) if initial_observation_count==1 else [public_observation(s['observation']) for s in initial_steps])
     turns=[{'from':'human','value':json.dumps(initial,ensure_ascii=False)}]
-    for step in t['steps'][1:]:
+    for step in t['steps'][initial_observation_count:]:
         turns.extend([{'from':'gpt','value':json.dumps({'action':step['action']},ensure_ascii=False)},
           {'from':'observation','value':json.dumps(public_observation(step['observation']),ensure_ascii=False)}])
     turns.append({'from':'gpt','value':json.dumps({'final':{k:v for k,v in t['final'].items() if k!='cost'}},ensure_ascii=False)})
     row={'system':t['system']+'\nTools: '+json.dumps(t['tools'],ensure_ascii=False),'tools':'','conversations':turns}
     note={'task_id':t['task']['task_id'],'quality_label':'silver_anonymous_publisher_fields','semantic_verified':False,'benchmark_gold':False,
       'trace_sha256':digest(t),'teacher':t['teacher'],'required_terms':required_terms,'fully_autonomous':False,
-      'authored_assistant_targets':0,'model_decided_assistant_targets':len(t['steps']),'fresh_observer_executed':obs.get('model_executed_this_episode') is True,
+      'authored_assistant_targets':0,'initial_observation_count':initial_observation_count,'model_decided_assistant_targets':len(t['steps'])-initial_observation_count+1,'fresh_observer_executed':all(s['observation'].get('model_executed_this_episode') is True for s in initial_steps),
       'scope':'training_exploration; exact field match plus actual text read; no formal QA accuracy'}
     return row,note
 

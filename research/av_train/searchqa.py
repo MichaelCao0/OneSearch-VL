@@ -171,12 +171,12 @@ class LocalController:
             def __call__(self,input_ids,scores,**kwargs):
                 return (decision_is_complete if protocol=="canonical" else native_decision_is_complete)(tokenizer.decode(input_ids[0,prefix_len:],skip_special_tokens=True))
         with self.torch.inference_mode():
-            tokens=self.model.generate(**inputs,max_new_tokens=self.max_new_tokens,do_sample=False,use_cache=True,
+            tokens=self.model.generate(**inputs,max_new_tokens=self.max_new_tokens,**getattr(self,'sampling_options',{'do_sample':False}),use_cache=True,
                 stopping_criteria=self.stopping_list([OneDecisionStop()]))
         raw=self.tokenizer.decode(tokens[0,inputs['input_ids'].shape[1]:],skip_special_tokens=True)
         self.calls+=1;self.total_tokens+=tokens.shape[1]
         write_json(self.out/f'{self.calls:04d}.private.json',{'raw_output':raw,'input_tokens':inputs['input_ids'].shape[1],
-            'generated_tokens':tokens.shape[1]-inputs['input_ids'].shape[1],'wall_seconds':time.monotonic()-start})
+            'generated_tokens':tokens.shape[1]-inputs['input_ids'].shape[1],'wall_seconds':time.monotonic()-start,'sampling_options':getattr(self,'sampling_options',{'do_sample':False}),'episode_seed':getattr(self,'episode_seed',None)})
         return (parse_decision if self.protocol=="canonical" else parse_native_decision)(raw)
 
 
