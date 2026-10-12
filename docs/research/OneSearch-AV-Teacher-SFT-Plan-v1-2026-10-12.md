@@ -100,4 +100,4 @@ pixi run --locked python -m research.av_train.teacher_rollouts status \
 - 原生 Gemini 完整 MP4 输入通过两组独立语音/画面对照：黄色/绿色画面与 Copper Falcon/Violet Harbor 转写均正确。隔离的蜂鸣计数、短音频访问表现不稳定，非语音感知需要后续逐类测量。OpenAI `video_url` 路径会返回错误感知，已排除出首批生产；当前使用同一 gateway 的 `/api/v1beta` 原生接口。合成控制媒体只用于接口验证，不进入训练集。
 - 相关集成测试 80 项：79 通过，1 项在默认 CPU 环境跳过；该 tokenizer 用例在 pinned 原 trainer 环境单独通过。原 trainer 的 5 项 CPU label/media/sampler tests 通过。独立 review 发现并修复 structured receipt 的单独 exporter 导入问题，14 项相关测试复核通过。
 - 之前 trajectory 与 answer-only 各做过 2 行、8 个真实 optimizer updates 的 GPU 工程 pilot，保存与重载已验证；它证明训练通路，尚无 held-out 性能增长结果。
-- 用户最新追加授权：实现取得实质进展后可以提交 kjob。当前阶段尚未提交新 GPU Job；先生成并验收真实成功数据，再按项目 preflight 和剩余预算安排学习实验，记录新的授权与实际消耗。
+- 本轮新 kjob `slurm-profile-slurm-dvt82` 已 Complete：1 张 NVIDIA H20Z，13 个独立题目，每种格式 13 行，trajectory/answer-only 各 16 次真实 optimizer updates；保存 optimizer/scheduler/RNG，LoRA B 更新，392 个 adapter 张量 GPU 重载逐项相等。耗时 668 秒（0.186 单卡小时），没有自动重试。此轮验证真实 teacher 数据训练通路；尚未验证 held-out 性能增长。

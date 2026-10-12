@@ -20,7 +20,7 @@ Qwen2.5-Omni-7B student 原生接收音视频，在原 `run_agent_loop` 中调�
 
 当前 v7 计划共有 60 候选，其中 40 条未执行，没有自动重试。生成 queue 的 `status` 只统计生成阶段，固定 retained=0；实际保留数量以 review/export summary 为准。源码或媒体变更后建立新版本，不继续调用失效的冻结 plan。
 
-v7 的失败包括服务错误和达到轮数上限仍未给出最终回答；不能把 pipeline `status=ok` 直接当作有效训练数据。自动 review 检查答案字段、媒体是否匹配参考、query 是否来自可见可听线索及是否存在重大幻觉。它使用同一 Gemini 模型的另一次调用，因此有相关偏差；13 条是探索性 silver，benchmark gold=0。既有来源家族近重复隔离尚需补齐，不以这 20 题报告正式泛化准确率。
+v7 的 5 个失败为 3 条 HTTP 503、1 条达到轮数上限仍未给出最终回答、1 条多轮媒体累积超过 inline 大小预算；不能把 pipeline `status=ok` 直接当作有效训练数据。自动 review 检查答案字段、媒体是否匹配参考、query 是否来自可见可听线索及是否存在重大幻觉。它使用同一 Gemini 模型的另一次调用，因此有相关偏差；13 条是探索性 silver，benchmark gold=0。既有来源家族近重复隔离尚需补齐，不以这 20 题报告正式泛化准确率。
 
 ## 代码与验证
 
@@ -41,8 +41,16 @@ research/runs/av-teacher-data-20261012-v7/silver-sft-v1/
 
 私有媒体、API 配置、silver verdict、运行日志和权重留在远端，不进入公共 Git 提交。代码、环境 lock、测试与中文文档按用户授权提交到 fork。
 
+## 新的 GPU 训练结果
+
+CPU 全数据 audit 通过：trajectory 与 answer-only 共 26 行，全部 AV、assistant labels 和 user/tool/media mask 通过；最长 trajectory 11,741 token、answer-only 5,834 token。Trajectory 共 46 个 assistant 回合、3,078 supervised token；answer-only 共 13 回合、993 supervised token。输入 token 总量不同，这次固定更新数的 pilot 不能代替计算量匹配的主实验。
+
+`slurm-profile-slurm-dvt82` 已于 2026-10-12 完成，1 张 NVIDIA H20Z，实际 668 秒，无重试。两组各完成 16 个真实 optimizer updates，保存 `checkpoint-16`；optimizer step、scheduler epoch、Python/NumPy/CPU/CUDA RNG、非零有限梯度、LoRA B 更新与 392 个 adapter 张量逐项重载全部验证通过。没有执行训练恢复实验，也没有 held-out 性能增长结果。
+
+证据：`research/runs/av-native-sft-20261012-v2/gpu-v1/checkpoint-validation.json`、`cluster/job-terminal.json` 和 `cluster/budget-after-job.json`。总 GPU 使用 4,154 秒，当前追加预算使用 2,112 / 14,400 秒。任务已 Complete，保留日志和权重；媒体和 checkpoints 不发布到 Git。
+
 ## 下一步学习实验
 
-用户已重新允许有实质进展后提交 kjob。新任务应验证本轮真实多轮 teacher 数据在原 trainer 中的实际学习和 checkpoint；先完成 CPU 全数据 audit，再冻结数据/源码，按照单 GPU 和既有预算执行。旧 2 行、8 updates 的 pilot 已验证训练保存重载，不重复宣称为新进展。
+用户已重新允许有实质进展后提交 kjob。本轮已按 CPU 全数据 audit、冻结数据/源码、单 GPU 和既有预算执行，验证实际学习与 checkpoint。旧 2 行、8 updates 的 pilot 已验证训练保存重载，不重复宣称为新进展。
 
 后续性能实验扩大到 1K–2K 保留轨迹，在同题、同初始权重和匹配工具预算下比较原生 Omni、answer-only SFT 与 trajectory SFT；用冻结 held-out QA 测量答案准确率、任务成功、音频贡献与训练计算量。15K–20K 是主数据规模目标，当前 13 条不足以验证研究假设。

@@ -61,7 +61,7 @@ Interfaces: prepare_plan(batch_dir, out_dir, teacher_config, prompt_file, candid
 
 - [x] 中文说明 15K–20K 总体规模、teacher 与 student 分工、现有 20题/97来源和 API 媒体能力边界。
 - [x] 运行相关回归、diff --check、检查不包含私有数据/权重/配置。
-- [ ] 将公共代码、测试、环境和文档 commit/push 到既有 research/av-deepresearch；校验 GitHub SHA。
+- [x] 将公共代码、测试、环境和文档 commit/push 到既有 research/av-deepresearch；校验 GitHub SHA。
 
 ## 2026-10-12 实际执行补充
 
@@ -83,3 +83,6 @@ Interfaces: prepare_plan(batch_dir, out_dir, teacher_config, prompt_file, candid
 - 80 项集成 tests（79 pass、1 pinned tokenizer skip，后者独立 pass）；原 trainer CPU 5 项通过。
 - 单独 exporter 的 structured receipt import 已修复，新子进程红绿回归和 reviewer 14 tests 复核通过。
 - GPU 新任务以 CPU 全数据 audit 和冻结后的预算为准，状态见 teacher execution 文档。
+
+- 公共代码 d574188 已推送并回读 GitHub SHA；工作区干净。
+- 新 kjob slurm-profile-slurm-dvt82 Complete：1 张 H20Z、668 秒，两组各 13 行、16 updates，optimizer/scheduler/RNG 与 392 adapter tensors 重载核对通过。无 held-out 性能主张。
