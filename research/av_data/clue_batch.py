@@ -35,7 +35,7 @@ def validate_authoring_cases(cases,docs,sources):
         ids.add(tid)
         if sid not in sources or sources[sid]['media_type']!='audio_video':raise ValueError('Target must be reserved AV source')
         start=number(case['start_s'],'start_s');end=number(case['end_s'],'end_s')
-        if not 0<=start<end<=sources[sid]['duration_s'] or end-start>30.:raise ValueError('Bounded valid clue crop required')
+        if not 0<=start<end or end>sources[sid]['duration_s']+1e-6 or end-start>30.+1e-6:raise ValueError('Bounded valid clue crop required')
         if not isinstance(case['question'],str) or not case['question'].strip() or not isinstance(case['scenario'],str):raise ValueError('Question/scenario required')
         fields=case['fields']
         if not isinstance(fields,list) or not fields:raise ValueError('Answer fields required')
