@@ -4,7 +4,7 @@ import json
 import os
 from pathlib import Path
 
-MODALITIES = ("single_image", "multi_image", "video")
+MODALITIES = ("single_image", "multi_image", "video", "audio_video")
 
 
 def retrieval_disabled() -> bool:
@@ -33,6 +33,19 @@ def _system_prompt(modality: str, disable_retrieval: bool) -> str:
     specs = [spec for spec in _specs_from_prompt(original)
              if not is_retrieval_tool(spec["function"]["name"])]
     definitions = "\n".join(json.dumps(spec, ensure_ascii=False) for spec in specs)
+    if modality == "audio_video":
+        return (
+            "You are an audio/video question-answering agent. External retrieval is disabled "
+            "for this run. Inspect the supplied native media, including audio when present. "
+            "Use inspect_av to replay a bounded interval. start_s/end_s are seconds relative "
+            "to the input video_n/clip_n handle; clips start at 0. They are ordinary playback "
+            "seconds, not frame-grid indices. Do not invent sources or external verification. "
+            "If the media cannot establish the requested fact, state that evidence is insufficient.\n"
+            "Before a tool call, reason briefly in <think>...</think>, then emit exactly one "
+            '<tool_call>{"name":"...","arguments":{...}}</tool_call> and wait for its '
+            "observation. Finish with <response>...</response>.\n\n<tools>\n"
+            + definitions + "\n</tools>\n"
+        )
     return (
         f"You are a visual inspection agent for {modality} inputs.\n"
         "External retrieval is disabled for this run. Use the provided media and "

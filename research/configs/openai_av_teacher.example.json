@@ -1,0 +1,9 @@
+{
+  "schema": "onesearch-openai-av-teacher.v1",
+  "model_env": "ONESEARCH_TEACHER_MODEL",
+  "api_key_env": "ONESEARCH_TEACHER_API_KEY",
+  "base_url_env": "ONESEARCH_TEACHER_BASE_URL",
+  "default_base_url": "https://llm-api.cc/api/v1",
+  "timeout_s": 120,
+  "max_request_bytes": 20000000
+}

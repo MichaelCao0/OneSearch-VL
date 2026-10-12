@@ -453,6 +453,7 @@ def run_agent_loop(
     inference_cfg: Optional[InferenceConfig] = None,
     system_instruction: Optional[str] = None,
     modality: str = "video",
+    search_backend: Any = None,
 ) -> Dict[str, Any]:
     """Multi-turn tool loop shared by video, single-image, and multi-image pipelines."""
 
@@ -489,6 +490,7 @@ def run_agent_loop(
         "single_image": int(os.environ.get("SINGLE_IMAGE_MAX_TURNS", "8")),
         "multi_image": int(os.environ.get("MULTI_IMAGE_MAX_TURNS", "12")),
         "video": int(os.environ.get("VIDEO_AGENT_MAX_TURNS", "12")),
+        "audio_video": int(os.environ.get("AV_AGENT_MAX_TURNS", "8")),
     }
     for turn_num in range(min(config.MAX_TURNS, sft_max_turns.get(modality, 12))):
         try:
@@ -567,12 +569,25 @@ def run_agent_loop(
                     turn_num,
                 )
                 turn_record["tool_output"] = observation_text
+                if modality == "audio_video":
+                    turn_record["protocol_repair"] = True
+                _obs(observation_text)
+                continue
+            if modality == "audio_video":
+                observation_text = (
+                    "<observation>\nProtocol error: the previous turn contained no complete action or final answer. "
+                    "Continue with exactly one executable <tool_call>{\"name\":\"tool_name\",\"arguments\":{...}}</tool_call> "
+                    "or a final answer inside <response>...</response>.\n</observation>"
+                )
+                turn_record["tool_output"] = observation_text
+                turn_record["protocol_repair"] = True
                 _obs(observation_text)
                 continue
             logger.info("Turn %d ended without tool call or response tag.", turn_num)
             break
 
         os.makedirs(intermediate_dir, exist_ok=True)
+        backend_kwargs = {"search_backend": search_backend} if search_backend is not None else {}
         tool_message, new_images = tools.execute_tool(
             tool_call_json,
             image_paths_dict,
@@ -583,6 +598,7 @@ def run_agent_loop(
             filename_prefix=filename_prefix,
             visual_lookup=visual_lookup,
             modality=modality,
+            **backend_kwargs,
         )
         observation_text = f"<observation>\n{tool_message}\n</observation>"
         turn_record["tool_output"] = observation_text
@@ -592,6 +608,9 @@ def run_agent_loop(
                 image_paths_dict[new_id] = payload
                 if new_id.startswith("clip_") and isinstance(payload, dict):
                     clip_video_url = payload.get("video_url")
+                    if payload.get("kind") == "native_av" and runner_supports_video and clip_video_url:
+                        _obs(observation_text, [_native_av_part(payload)])
+                        continue
                     if runner_supports_video and clip_video_url:
                         # Media before text — matches SFT ``<video><observation>...``.
                         _obs(
@@ -859,4 +878,61 @@ def process_single_case(
         inference_cfg=cfg,
         system_instruction=sys_prompt,
         modality="video",
+    )
+
+
+def _native_av_part(handle: Dict[str, Any]) -> Dict[str, Any]:
+    """Retain original AV media in the existing runner/message protocol."""
+    return {"video_url": {
+        "url": handle["video_url"],
+        "has_audio": handle["has_audio"],
+        "native_av": True,
+        "source_start_s": handle["source_start_s"],
+        "source_end_s": handle["source_end_s"],
+        "clip_duration_s": handle["duration"],
+    }}
+
+
+def process_native_av_case(
+    *, question: str, source_path: str, runner: BaseRunner,
+    output_dir: str, case_id: str, case_idx: int = 0,
+    search_backend: Any = None,
+    inference_cfg: Optional[InferenceConfig] = None,
+    system_instruction: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Bootstrap real AV, then use the original OneSearch multi-turn loop.
+
+    This is an AV entrypoint rather than a second agent loop. source_path is
+    private media binding; only the question and actual media enter the actor.
+    """
+    from .av_io import make_native_av_handle
+
+    if not question.strip() or not re.fullmatch(r"[A-Za-z0-9_.-]+", case_id):
+        raise ValueError("Nonempty question and safe case ID required")
+    if not getattr(runner, "supports_audio_video", False):
+        raise ValueError("Native AV requires an audio-video runner")
+    handle = make_native_av_handle(source_path)
+    media_note = (
+        f"video_1: {handle['duration']:.3f} seconds; "
+        f"audio track {'present' if handle['has_audio'] else 'absent'}. "
+        "inspect_av uses seconds relative to the selected handle."
+    )
+    contents = [{"role": "user", "parts": [
+        _native_av_part(handle), {"text": media_note + "\nQuestion: " + question}
+    ]}]
+    trajectory = {
+        "case_id": case_id, "case_idx": case_idx, "modality": "audio_video",
+        "question": question, "input_mode": "native_audio_video",
+        "input_media": {"path": handle["video_url"], "duration_s": handle["duration"],
+                        "has_audio": handle["has_audio"]},
+        "turns": [], "timestamp": datetime.now().isoformat(),
+    }
+    return run_agent_loop(
+        runner=runner, gemini_contents=contents,
+        image_paths_dict={"video_1": handle}, trajectory=trajectory,
+        output_dir=output_dir, intermediate_dir=os.path.join(output_dir, "intermediate"),
+        case_id=case_id, case_idx=case_idx, filename_prefix="native_av",
+        runner_supports_video=True, inference_cfg=inference_cfg,
+        system_instruction=system_instruction or get_system_prompt("audio_video"),
+        modality="audio_video", search_backend=search_backend,
     )

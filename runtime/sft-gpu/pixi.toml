@@ -22,7 +22,11 @@ accelerate = "==1.11.0"
 peft = "==0.18.1"
 trl = "==0.24.0"
 torchdata = { url = "https://files.pythonhosted.org/packages/95/d4/af694ef718aedbe95a72760ab9ff7a6a7a44ace2d7f70c27bfeb67c5c503/torchdata-0.11.0-py3-none-any.whl" }
-av = "==16.0.0"
+av = "==16.0.1"
+qwen-omni-utils = { version = "==0.0.9", extras = ["decord"] }
+librosa = "==0.11.0"
+soundfile = "==0.13.1"
+decord = "==0.6.0"
 pillow = "==11.3.0"
 numpy = "==2.2.6"
 pandas = "==2.3.3"
@@ -38,3 +42,5 @@ protobuf = "==6.33.0"
 
 [tasks]
 label-audit = "env PYTHONPATH=../../SFT/src:../.. python -m research.av_train.label_audit"
+
+native-sft = "env PYTHONPATH=../../SFT/src:../.. python -m research.av_train.native_sft"

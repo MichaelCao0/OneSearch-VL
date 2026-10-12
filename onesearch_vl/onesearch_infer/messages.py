@@ -290,7 +290,7 @@ def to_oai_messages(contents: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
                     # vLLM runner can compute the video processor's t_bar total
                     # (longest_edge = max_pixels * t_bar) to match HF/SFT.
                     if isinstance(v, dict):
-                        for k in ("max_pixels", "min_pixels", "n_frames"):
+                        for k in ("max_pixels", "min_pixels", "n_frames", "fps", "has_audio", "native_av", "source_start_s", "source_end_s", "clip_duration_s"):
                             if v.get(k) is not None:
                                 vpart[k] = v[k]
                     oai_parts.append(vpart)

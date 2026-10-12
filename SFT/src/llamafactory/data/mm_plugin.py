@@ -2092,6 +2092,136 @@ class Qwen2OmniPlugin(Qwen2VLPlugin):
     audio_eos_token: str = "<|audio_end|>"
 
     @override
+    def _preprocess_image(self, image: "ImageObject", **kwargs) -> "ImageObject":
+        # Align exactly once to the native processor's spatial patch factor.
+        # The processor receives do_resize=False below, so its checkpoint
+        # defaults cannot silently replace the configured image/video budget.
+        from transformers.models.qwen2_vl.image_processing_qwen2_vl import smart_resize
+
+        min_pixels = kwargs["image_min_pixels"]
+        max_pixels = kwargs["image_max_pixels"]
+        height, width = smart_resize(
+            image.height, image.width, factor=kwargs.get("image_factor", 28),
+            min_pixels=min_pixels, max_pixels=max_pixels,
+        )
+        if not min_pixels <= height * width <= max_pixels:
+            raise ValueError("Omni pixel bounds cannot be satisfied at the processor patch factor.")
+        if image.size != (width, height):
+            image = image.resize((width, height))
+        return image.convert("RGB") if image.mode != "RGB" else image
+
+    @override
+    def _regularize_videos(self, videos: list["VideoInput"], **kwargs) -> "RegularizedVideoOutput":
+        r"""Sample finite clips over their whole decoded timeline, including VFR.
+
+        A scalar-only first pass obtains decoded extent even when MKV omits
+        stream.frames/duration. The second pass keeps two decoder frames and
+        at most video_maxlen resized selected frames, never the entire clip.
+        Sampling starts at the first decoded PTS; nonzero origins are valid.
+        """
+        requested_fps = float(kwargs.get("video_fps", 2.0))
+        max_frames = int(kwargs.get("video_maxlen", 128))
+        if requested_fps <= 0 or max_frames < 2:
+            raise ValueError("Omni video_fps must be positive and video_maxlen must allow a temporal pair.")
+        max_frames -= max_frames % 2
+        results, fps_per_video, durations, frames_indices, receipts = [], [], [], [], []
+        for video in videos:
+            frames, indices, sampled_pts = [], [], []
+            if _check_video_is_nested_images(video):
+                count = len(video)
+                if not count:
+                    raise ValueError("Omni video contains no frames.")
+                duration = count / requested_fps
+                sample_count = min(count, max_frames)
+                sample_count = min(max_frames, sample_count + sample_count % 2)
+                sample_count = max(2, sample_count)
+                indices = np.linspace(0, count - 1, sample_count).round().astype(int).tolist()
+                frames = self._regularize_images([video[i] for i in indices], **kwargs)["images"]
+                sampled_pts = [i / requested_fps for i in indices]
+                receipt = {"sampling_mode": "uniform_supplied_frames", "decoded_frame_count": count,
+                           "first_decoded_pts_s": 0.0, "last_decoded_pts_s": (count - 1) / requested_fps,
+                           "duration_source": "supplied_frames_and_configured_fps"}
+            else:
+                with _open_video_container(video) as (container, stream):
+                    count, first_pts, last_pts, previous_pts = 0, None, None, None
+                    complete_pts, monotonic_pts = True, True
+                    min_step, max_step, last_step, last_frame_duration = None, 0.0, None, None
+                    metadata = {"stream_frames": stream.frames, "stream_duration": stream.duration,
+                                "container_duration_us": container.duration}
+                    for frame in container.decode(stream):
+                        pts = float(frame.pts * frame.time_base) if frame.pts is not None and frame.time_base else None
+                        if pts is None or not math.isfinite(pts):
+                            complete_pts = False
+                        else:
+                            if first_pts is None:
+                                first_pts = pts
+                            if previous_pts is not None:
+                                step = pts - previous_pts
+                                monotonic_pts = monotonic_pts and step >= 0
+                                if step > 0:
+                                    min_step = step if min_step is None else min(min_step, step)
+                                    max_step, last_step = max(max_step, step), step
+                            previous_pts, last_pts = pts, pts
+                        frame_duration = getattr(frame, "duration", None)
+                        last_frame_duration = float(frame_duration * frame.time_base) if frame_duration and frame.time_base else None
+                        count += 1
+                    if not count:
+                        raise ValueError("Omni video contains no decodable frames.")
+                    rate = float(stream.average_rate) if stream.average_rate else None
+                    use_pts = complete_pts and monotonic_pts and first_pts is not None
+                    if use_pts:
+                        tail = last_frame_duration or last_step or (1.0 / rate if rate else None)
+                        duration = last_pts - first_pts + (tail or 0.0)
+                        duration_source = "decoded_pts_and_last_frame_duration"
+                    else:
+                        duration = float(stream.duration * stream.time_base) if stream.duration is not None else 0.0
+                        duration_source = "stream_duration"
+                    if duration <= 0:
+                        duration = float(container.duration / 1e6) if container.duration else (count / rate if rate else 0.0)
+                        duration_source = "container_duration" if container.duration else "decoded_count_and_average_rate"
+                    if duration <= 0 or not math.isfinite(duration):
+                        raise ValueError("Omni finite video duration is unavailable.")
+                    sample_count = max(1, min(count, max_frames, math.floor(duration * requested_fps)))
+                    sample_count = max(2, min(max_frames, sample_count + sample_count % 2))
+                    targets = np.linspace(first_pts, last_pts, sample_count) if use_pts else np.linspace(0, count - 1, sample_count)
+                    # Seeking in stream time_base supports both zero and nonzero origins.
+                    seek_pts = math.floor(first_pts / float(stream.time_base)) if use_pts else (stream.start_time or 0)
+                    container.seek(seek_pts, stream=stream, backward=True)
+                    target_index, previous_frame, previous_value, previous_index = 0, None, None, None
+                    for frame_index, frame in enumerate(container.decode(stream)):
+                        value = float(frame.pts * frame.time_base) if use_pts else frame_index
+                        while target_index < sample_count and targets[target_index] <= value + 1e-9:
+                            chosen, chosen_index, chosen_value = frame, frame_index, value
+                            if previous_frame is not None and abs(targets[target_index] - previous_value) < abs(value - targets[target_index]):
+                                chosen, chosen_index, chosen_value = previous_frame, previous_index, previous_value
+                            frames.append(self._regularize_images([chosen.to_image()], **kwargs)["images"][0])
+                            indices.append(chosen_index)
+                            sampled_pts.append(chosen_value if use_pts else chosen_index * duration / count)
+                            target_index += 1
+                            del chosen
+                        previous_frame, previous_value, previous_index = frame, value, frame_index
+                        if target_index == sample_count:
+                            break
+                    if len(frames) != sample_count:
+                        raise ValueError("Omni video changed or full-timeline sampling failed during second decode.")
+                    receipt = {**metadata, "sampling_mode": "uniform_decoded_pts" if use_pts else "uniform_decoded_indices",
+                               "decoded_frame_count": count, "first_decoded_pts_s": first_pts, "last_decoded_pts_s": last_pts,
+                               "min_decoded_pts_step_s": min_step, "max_decoded_pts_step_s": max_step,
+                               "duration_source": duration_source}
+            fps = len(frames) / duration
+            results.append(frames); fps_per_video.append(fps); durations.append(duration)
+            frames_indices.append([i * requested_fps for i in sampled_pts])
+            receipts.append({**receipt, "duration_s": duration, "selected_frame_count": len(frames),
+                             "selected_frame_indices": indices, "sampled_pts_s": sampled_pts,
+                             "effective_fps": fps, "requested_fps": requested_fps, "video_maxlen": max_frames,
+                             "max_retained_selected_frames": len(frames), "decoder_frames_retained_bound": 2,
+                             "selected_frame_sizes_wh": [list(frame.size) for frame in frames],
+                             "configured_min_pixels": kwargs["image_min_pixels"],
+                             "configured_max_pixels": kwargs["image_max_pixels"], "processor_do_resize": False})
+        return {"videos": results, "fps_per_video": fps_per_video, "durations": durations,
+                "frames_indices": frames_indices, "sampling_receipts": receipts}
+
+    @override
     def _get_mm_inputs(
         self,
         images: list["ImageInput"],
@@ -2110,8 +2240,9 @@ class Qwen2OmniPlugin(Qwen2VLPlugin):
                 images,
                 image_max_pixels=getattr(processor, "image_max_pixels", 768 * 768),
                 image_min_pixels=getattr(processor, "image_min_pixels", 32 * 32),
+                image_factor=image_processor.patch_size * image_processor.merge_size,
             )["images"]
-            mm_inputs.update(image_processor(images, return_tensors="pt"))
+            mm_inputs.update(image_processor(images, do_resize=False, return_tensors="pt"))
 
         if len(videos) != 0:
             video_dict = self._regularize_videos(
@@ -2120,8 +2251,10 @@ class Qwen2OmniPlugin(Qwen2VLPlugin):
                 image_min_pixels=getattr(processor, "video_min_pixels", 16 * 16),
                 video_fps=getattr(processor, "video_fps", 2.0),
                 video_maxlen=getattr(processor, "video_maxlen", 128),
+                image_factor=video_processor.patch_size * video_processor.merge_size,
             )
-            mm_inputs.update(video_processor(videos=video_dict["videos"], return_tensors="pt"))
+            mm_inputs.update(video_processor(videos=video_dict["videos"], do_resize=False,
+                                            do_sample_frames=False, return_tensors="pt"))
             temporal_patch_size: int = getattr(image_processor, "temporal_patch_size", 2)
             mm_inputs["video_second_per_grid"] = torch.tensor(
                 [temporal_patch_size / fps for fps in video_dict["fps_per_video"]]

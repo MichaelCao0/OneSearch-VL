@@ -100,6 +100,14 @@ class ModelSpec:
 
 
 MODEL_REGISTRY: Dict[str, ModelSpec] = {
+    "omni-7b": ModelSpec(
+        name="omni-7b",
+        family="qwen2_5_omni",
+        display_name="Qwen2.5-Omni-7B (native AV)",
+        default_checkpoint_env="ONESEARCH_OMNI_CHECKPOINT",
+        default_checkpoint="Qwen/Qwen2.5-Omni-7B",
+        supports_video=True,
+    ),
     "8b": ModelSpec(
         name="8b",
         family="qwen3_vl_dense",

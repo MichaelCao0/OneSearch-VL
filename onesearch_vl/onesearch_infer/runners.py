@@ -1621,6 +1621,12 @@ def build_runner(
             f"Unknown model {model_name!r}. Choose one of: {config.list_model_names()}"
         )
     spec = config.MODEL_REGISTRY[model_name]
+    if spec.family == "qwen2_5_omni":
+        from .omni_runner import OmniRunner
+        return OmniRunner(
+            spec, checkpoint=config.resolve_checkpoint(spec, checkpoint),
+            gpus=gpus, dtype=dtype,
+        )
     if spec.family == "claude":
         return ClaudeAnthropicRunner(spec)
     if spec.family == "claude_anthropic":

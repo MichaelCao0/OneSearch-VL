@@ -13,6 +13,7 @@ from typing import Any, Callable, Dict, Optional, Tuple
 
 from PIL import Image
 
+from . import av_io
 from . import config
 from . import cos_upload
 from . import image_io
@@ -256,7 +257,7 @@ def has_response_tag(text: str) -> bool:
 # ---------------------------------------------------------------------------
 
 
-ToolResult = Tuple[str, Dict[str, str]]
+ToolResult = Tuple[str, Dict[str, Any]]
 
 
 def _is_private_http_url(value: str) -> bool:
@@ -442,8 +443,14 @@ def execute_tool(
     filename_prefix: str = "fvqa_train",
     visual_lookup: Optional[Callable[..., object]] = None,
     modality: str = "video",
+    *,
+    search_backend: Optional[object] = None,
 ) -> ToolResult:
-    """Dispatch a parsed tool call. Returns ``(message, new_images)``."""
+    """Dispatch a parsed tool call; optionally inject a scoped search provider.
+
+    Returns ``(observation, new_media_handles)``. The default provider and the
+    ONESEARCH_DISABLE_RETRIEVAL gate retain their existing behavior.
+    """
 
     try:
         call = (
@@ -460,9 +467,9 @@ def execute_tool(
             f"Tool execution error:\nRetrieval disabled (ONESEARCH_DISABLE_RETRIEVAL=1): {name}.",
             {},
         )
-    params = call.get("parameters", {}) or {}
+    params = call.get("arguments", call.get("parameters", {})) or {}
 
-    if name == "visit_webpage":
+    if name == "visit_webpage" and search_backend is None:
         return (
             "Tool execution error:\nvisit_webpage is not available. "
             "Use text_search to fetch and summarise web evidence.",
@@ -480,10 +487,52 @@ def execute_tool(
     if name not in tool_names(modality):
         return f"Tool execution error:\n{name!r} is not available in {modality} mode.", {}
 
+    if name == "visit_webpage":
+        try:
+            return search_backend.visit_webpage(params.get("url", "")), {}
+        except (ValueError, OSError, RuntimeError) as exc:
+            logger.warning("Injected webpage backend failed: %s", type(exc).__name__)
+            return "Tool execution error:\nUnable to read a visible source URL from the configured backend.", {}
+
+    if name == "inspect_av":
+        video_ref = params.get("video") or params.get("clip") or ""
+        if not isinstance(video_ref, str):
+            return "Tool execution error:\ninspect_av requires a string video_n/clip_n handle.", {}
+        entry = image_paths_dict.get(video_ref)
+        clip_numbers = [int(key[5:]) for key in image_paths_dict if key.startswith("clip_") and key[5:].isdigit()]
+        clip_id = f"clip_{max(clip_numbers, default=0) + 1}"
+        safe_case_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(case_id))
+        safe_prefix = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(filename_prefix))
+        output = os.path.join(intermediate_dir, f"{safe_prefix}_{safe_case_id}_{case_idx}_turn{turn_num}_{clip_id}.mp4")
+        try:
+            clip = av_io.crop_native_av(entry, params.get("start_s"), params.get("end_s"), output)
+        except (ValueError, OSError, RuntimeError) as exc:
+            logger.warning("Native AV crop failed: %s", type(exc).__name__)
+            return (
+                "Tool execution error:\ninspect_av requires a native video_n/clip_n handle "
+                "and finite seconds satisfying 0 <= start_s < end_s <= handle duration. "
+                "The requested media interval could not be produced.", {}
+            )
+        message = (f"inspect_av succeeded. New clip handle: {clip_id}; "
+                   f"input interval [{clip['parent_start_s']:.3f}, {clip['parent_end_s']:.3f}) s; "
+                   f"duration={clip['duration']:.3f} s; audio={'present' if clip['has_audio'] else 'absent'}. "
+                   "The new clip starts at 0 seconds.")
+        return message, {clip_id: clip}
+
     if name in {"text_search", "local_search", "web_search"}:
         query = params.get("q") or params.get("query") or ""
         if not query:
             return "Tool execution error:\n'q' is required for text_search.", {}
+        if search_backend is not None:
+            try:
+                return search_backend.text_search(
+                    query=query,
+                    lang=params.get("hl") or params.get("lang") or "en",
+                    top_k=search.normalize_top_k(params.get("top_k", 5)),
+                ), {}
+            except (ValueError, OSError, RuntimeError) as exc:
+                logger.warning("Injected search backend failed: %s", type(exc).__name__)
+                return "Tool execution error:\nSearch failed in the configured source backend.", {}
         return search.text_search(
             query=query,
             lang=params.get("hl") or params.get("lang") or "en",

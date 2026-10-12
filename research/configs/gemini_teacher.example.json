@@ -1,0 +1,10 @@
+{
+  "schema": "onesearch-gemini-av-teacher.v1",
+  "model_env": "ONESEARCH_TEACHER_MODEL",
+  "api_key_env": "ONESEARCH_TEACHER_API_KEY",
+  "base_url_env": "ONESEARCH_TEACHER_BASE_URL",
+  "default_base_url": "https://generativelanguage.googleapis.com/v1beta",
+  "timeout_s": 120,
+  "max_request_bytes": 20000000,
+  "action_protocol": "json_v1"
+}

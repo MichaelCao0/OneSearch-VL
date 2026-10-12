@@ -24,10 +24,18 @@
 
 2026-10-11 用户明确收敛范围：第一篇沿用 OneSearch-VL 的搜索问答范式，扩展音视频线索与检查能力；来源数量由问题决定，不强制跨来源比较或研究报告。Search for Generation 留作下一篇。
 
-当前任务范围以 `docs/research/OneSearch-AV-Research-Proposal-v3-SearchQA-2026-10-11.md` 为准；此前 proposal 和 codebase audit 保留历史依据。Benchmark gold 严格人审，但不阻止明确标为探索的真实 rollout 与 silver 数据候选采集。
-原始代码会丢弃音频，grid clock 不能直接当 source clock；原始时间映射、冻结 metadata corpus、严格任务隔离与 media-only receipts 已实现；语义 AV observer、可修订证据账本、同前缀分支 runner 和 GCR scorer 仍待实现。
+任务定义沿用 `docs/research/OneSearch-AV-Research-Proposal-v3-SearchQA-2026-10-11.md`；2026-10-12 用户修正后的主模型架构以 `docs/research/OneSearch-AV-Native-Omni-Architecture-v4-2026-10-12.md` 为准：Omni 原生接收音视频并执行搜索，替代固定 observer 文字转交 OneSearch 8B 的主线；复用原版搜索框架，8B 与模块化路线保留对照。此前方案保留历史依据。Benchmark gold 严格人审，但不阻止明确标为探索的真实 rollout 与 silver 数据候选采集。
+原版视觉路径不原生保留音频，grid clock 不能直接当 source clock。已有冻结语料、媒体预处理和历史 Omni observer。当前主线已在原版推理主干接入原生 Omni runner、真实多轮 AV 输入和原 LLaMA-Factory Omni 轨迹 SFT；LocalOmniController 文字路线仅作历史对照；时间处理保留基本同步并支持普通裁剪/VFR，不把旧严格时钟门槛或证据账本作为搜索 QA 主线。源码准备、CPU 验证、GPU 实际运行与性能增长分别报告。
 
 不得把 gold graph、答案、来源路径或未来 observation 提供给 actor。预测后果不能直接成为引用。转载不等于独立证据。
+
+## 2026-10-12 最新执行约束与 teacher 主线
+
+- 用户最新追加授权（2026-10-12）：有实质实现进展后可以提交 kjob。先完成 teacher AV 输入确认、真实成功数据与训练导出，再按已验证的项目 launcher/preflight/budget 提交有明确实验目标的 GPU Job；当前不能把未验证数据直接当正式 SFT 数据。
+- Student 是 Qwen2.5-Omni-7B 原生 AV；15K–20K 是保留成功 teacher 轨迹的训练目标，不代表已有数据。
+- Teacher API 凭据仅保存在远端 `/home/jovyan/.config/onesearch-av/teacher.env`（0600），配置 JSON 只写环境变量名称，日志与 Git 禁止凭据和媒体 base64。
+- 原生 Gemini 与 OpenAI 兼容 gateway 分别使用对应 runner；HTTP 200、模型列表或生成 receipt 不证明实际音视频理解。正式生成先验证具体媒体格式能传递可辨认的画面和声音。
+- 首批 20题 × 3候选是队列配置；完整时长的 teacher 传输媒体用 `research/av_train/teacher_media.py` 生成版本化新 batch，保留父媒体 lineage，不把同一录制的转码当独立来源。完成 rollout、语义成功、训练保留和模型性能分别计数。
 
 ## 验证与交付
 
