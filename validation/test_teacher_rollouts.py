@@ -147,6 +147,36 @@ class ProducerTests(unittest.TestCase):
                 run_shard(out, 0, max_candidates=1, max_api_calls=4)
         self.assertEqual(received, [])
 
+    def test_provider_http_failure_stops_other_shards_before_paid_calls(self):
+        out, _ = self.plan(candidates_per_task=1, shard_size=1)
+        with fixture_server([(503, {"error": "PRIVATE_PROVIDER_BODY"})]) as (url, received):
+            os.environ["ONESEARCH_TEACHER_BASE_URL"] = url
+            first = run_shard(out, 0, max_candidates=1, max_api_calls=8)
+            second = run_shard(out, 1, max_candidates=1, max_api_calls=8)
+        self.assertEqual(first["new_failed_candidates"], 1)
+        self.assertEqual(len(received), 1)
+        self.assertEqual(second["new_api_calls"], 0)
+        self.assertEqual(summarize_plan(out)["pending_candidates"], 1)
+        stop = (out / "provider-stop.json").read_text()
+        self.assertNotIn("PRIVATE_PROVIDER_BODY", stop)
+        self.assertNotIn("UNIT_TEST_NOT_A_SECRET", stop)
+
+    def test_provider_review_failure_leaves_other_cases_unattempted(self):
+        from research.av_train.teacher_silver_review import review
+        refs = [{"task_id": f"unit-task-{i}", "answer_fields": [], "support_quotes": []} for i in (1, 2)]
+        (self.batch / "answer-candidates.private.jsonl").write_text("".join(json.dumps(x) + "\n" for x in refs))
+        out, _ = self.plan(candidates_per_task=1, shard_size=2)
+        with fixture_server(self.replies() * 2 + [(503, {"error": "PRIVATE_PROVIDER_BODY"})]) as (url, received):
+            os.environ["ONESEARCH_TEACHER_BASE_URL"] = url
+            run_shard(out, 0, max_candidates=2, max_api_calls=8)
+            reviewed = review(out, self.root / "review", workers=1, max_candidates=2)
+            again = review(out, self.root / "review", workers=1, max_candidates=2)
+        self.assertEqual(len(received), 9)
+        self.assertEqual(reviewed["failed_reviews"], 1)
+        self.assertEqual(reviewed["retained_silver_candidates"], 0)
+        self.assertEqual(again["attempted_reviews"], 1)
+        self.assertTrue(reviewed["provider_stopped"])
+
     def test_running_candidate_after_crash_is_preserved_without_auto_retry(self):
         out, _ = self.plan(candidates_per_task=1)
         candidate = out / "episodes/unit-task-1__c01"

@@ -315,6 +315,18 @@ def native_components(snapshot, cutoff_len, use_audio_in_video):
             SupervisedDatasetProcessor(template,loaded["tokenizer"],loaded["processor"],data),loaded)
 
 
+def verify_assistant_target_text(tokenizer, raw, target):
+    """Compare actual targets after only the tokenizer's own normalization."""
+    normalizer=getattr(getattr(tokenizer,"backend_tokenizer",None),"normalizer",None)
+    normalized=normalizer.normalize_str(raw) if normalizer is not None else raw
+    target_text=tokenizer.decode(target,skip_special_tokens=False,clean_up_tokenization_spaces=False)
+    if not normalized or normalized not in target_text:
+        raise ValueError("actual assistant text not preserved in target tokens")
+    return {"actual_text_sha256":hashlib.sha256(raw.encode()).hexdigest(),
+            "tokenizer_text_sha256":hashlib.sha256(normalized.encode()).hexdigest(),
+            "tokenizer_normalization_applied":normalized!=raw}
+
+
 def audit_dataset(dataset_dir, model_manifest, out_dir, *, cutoff_len=32768):
     """Run original converter/plugin/supervised processor/collator on CPU."""
     dataset_dir=Path(dataset_dir); summary=json.loads((dataset_dir/"summary.json").read_text())
@@ -381,12 +393,10 @@ def audit_dataset(dataset_dir, model_manifest, out_dir, *, cutoff_len=32768):
                 begin=offset+len(source); end=begin+len(target)
                 if not target or labels[begin:end]!=target or ids[begin:end]!=target:
                     raise ValueError("assistant action/answer masked or lost")
-                target_text=loaded["tokenizer"].decode(target,skip_special_tokens=False)
                 raw=row["conversations"][turn*2+1]["value"]
-                if raw not in target_text:
-                    raise ValueError("actual assistant text not preserved in target tokens")
+                text_receipt=verify_assistant_target_text(loaded["tokenizer"],raw,target)
                 turn_reports.append({"assistant_turn":turn,"source_masked_tokens":len(source),
-                                     "target_tokens":len(target),"actual_text_sha256":hashlib.sha256(raw.encode()).hexdigest()})
+                                     "target_tokens":len(target),**text_receipt})
                 offset=end
             feature={"input_ids":ids,"attention_mask":[1]*len(ids),"labels":labels,
                      "images":media[0],"videos":media[1],"audios":media[2]}

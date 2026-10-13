@@ -20,6 +20,24 @@ class OriginalOmniTrainerTests(unittest.TestCase):
         torch.set_num_threads(2)
         sys.path.insert(0,str(ROOT/'SFT/src'))
 
+    def test_native_tokenizer_unicode_normalization_preserves_search_without_accepting_changed_text(self):
+        from transformers import AutoTokenizer
+        from research.av_train import native_sft
+        self.assertTrue(hasattr(native_sft,"verify_assistant_target_text"),"native text audit must use the actual tokenizer normalizer")
+        tokenizer=AutoTokenizer.from_pretrained(json.loads(MANIFEST.read_text())["snapshot_path"],local_files_only=True)
+        raw='<tool_call>{"name":"text_search","arguments":{"q":"হায় হায় লোকনৃত্য"}}</tool_call>'
+        target=tokenizer.encode(raw+"<|im_end|>",add_special_tokens=False)
+        self.assertNotIn(raw,tokenizer.decode(target,skip_special_tokens=False))
+        receipt=native_sft.verify_assistant_target_text(tokenizer,raw,target)
+        self.assertTrue(receipt["tokenizer_normalization_applied"])
+        self.assertNotEqual(receipt["actual_text_sha256"],receipt["tokenizer_text_sha256"])
+        for changed in [raw.replace("text_search","read_source"),raw.replace("হায় হায়","wrong query")]:
+            with self.subTest(changed=changed),self.assertRaisesRegex(ValueError,"actual assistant text"):
+                native_sft.verify_assistant_target_text(tokenizer,raw,tokenizer.encode(changed,add_special_tokens=False))
+        ascii_raw="<response>unaltered text</response>"
+        receipt=native_sft.verify_assistant_target_text(tokenizer,ascii_raw,tokenizer.encode(ascii_raw,add_special_tokens=False))
+        self.assertFalse(receipt["tokenizer_normalization_applied"])
+
     def test_lora_targets_freeze_audio_visual_and_projector_modules(self):
         import torch
         from llamafactory.hparams import FinetuningArguments

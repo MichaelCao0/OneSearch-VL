@@ -26,10 +26,11 @@ from onesearch_infer.pipeline import process_native_av_case
 from onesearch_infer.runners import InferenceConfig, _empty_response
 from onesearch_infer.search_backends import FrozenSearchBackend
 from .native_searchqa import prepare_cases
+from .provider_guard import ProviderGuard
 from .native_sft import file_sha, validate_trajectory
 
 SCHEMA = "onesearch-native-teacher-plan.v1"
-SOURCE_FILES = ["research/av_train/teacher_rollouts.py", "research/av_train/native_searchqa.py",
+SOURCE_FILES = ["research/av_train/provider_guard.py", "research/av_train/teacher_rollouts.py", "research/av_train/native_searchqa.py",
                 "research/av_train/native_sft.py", "research/av_train/generation_receipts.py",
                 "research/av_train/teacher_media.py",
                 "onesearch_vl/onesearch_infer/gemini_av_runner.py",
@@ -189,7 +190,8 @@ class BudgetedRunner:
     """Charge request slots before transport, retaining uncertain-call evidence."""
     supports_audio_video = True
 
-    def __init__(self, runner, limit):
+    def __init__(self, runner, limit, guard=None):
+        self.guard = guard
         self.runner = runner
         self.spec = runner.spec
         self.limit = limit
@@ -197,11 +199,16 @@ class BudgetedRunner:
         self.charge = None
 
     def infer(self, *args, **kwargs):
+        if self.guard and self.guard.stopped:
+            return _empty_response(self.runner.display_name, "Teacher provider queue stopped; request not sent")
         if self.calls >= self.limit:
             return _empty_response(self.runner.display_name, "Teacher invocation API request budget exhausted")
         self.calls += 1
         self.charge()
-        return self.runner.infer(*args, **kwargs)
+        response = self.runner.infer(*args, **kwargs)
+        if self.guard:
+            self.guard.observe(response)
+        return response
 
 
 def reconcile_candidate(folder, state, plan_sha):
@@ -240,12 +247,14 @@ def run_shard(plan_dir, shard_id, *, max_candidates, max_api_calls, reconcile_on
                 reconcile_candidate(folder, read_json(state_path) if state_path.exists() else {}, plan_sha)
             else:
                 pending.append(row)
-        if reconcile_only or not pending:
+        guard = ProviderGuard(root)
+        result["provider_stopped"] = guard.stopped
+        if reconcile_only or not pending or guard.stopped:
             return result
         settings = teacher_settings(read_json(root / "teacher-config.json"))
         teacher = make_teacher(settings)
         create_json_once(root / "teacher-resolved.private.json", teacher.identity)
-        runner = BudgetedRunner(teacher, max_api_calls)
+        runner = BudgetedRunner(teacher, max_api_calls, guard)
         backend = FrozenSearchBackend(plan["index_dir"], plan["scope"])
         old_turns = os.environ.get("AV_AGENT_MAX_TURNS")
         old_retrieval = os.environ.get("ONESEARCH_DISABLE_RETRIEVAL")
@@ -253,7 +262,7 @@ def run_shard(plan_dir, shard_id, *, max_candidates, max_api_calls, reconcile_on
         os.environ["ONESEARCH_DISABLE_RETRIEVAL"] = "0"
         try:
             for row in pending[:max_candidates]:
-                if runner.calls >= max_api_calls:
+                if runner.calls >= max_api_calls or guard.stopped:
                     break
                 folder = root / "episodes" / row["case_id"]
                 folder.mkdir()
@@ -286,6 +295,7 @@ def run_shard(plan_dir, shard_id, *, max_candidates, max_api_calls, reconcile_on
                 state["updated_at"] = now()
                 atomic_json(folder / "candidate-state.json", state)
             result["new_api_calls"] = runner.calls
+            result["provider_stopped"] = guard.stopped
         finally:
             for key, value in (("AV_AGENT_MAX_TURNS", old_turns), ("ONESEARCH_DISABLE_RETRIEVAL", old_retrieval)):
                 if value is None:

@@ -12,6 +12,7 @@ import fcntl
 import hashlib
 import html
 import json
+import math
 from pathlib import Path
 import re
 import secrets
@@ -26,6 +27,7 @@ from research.av_train.native_sft import file_sha
 from research.av_train.teacher_media import normalize_media
 from research.av_train.teacher_rollouts import atomic_json, now
 from research.av_train.generation_receipts import generation_identity
+from research.av_train.provider_guard import ProviderGuard
 from onesearch_vl.onesearch_infer.av_io import make_native_av_handle, crop_native_av
 from onesearch_vl.onesearch_infer.gemini_av_runner import GeminiAVRunner, GeminiAVSettings
 from onesearch_vl.onesearch_infer.runners import InferenceConfig
@@ -201,8 +203,10 @@ def run(plan_dir, workers=3, max_sources=100):
         if file_sha(root/name)!=plan[key]:raise ValueError('Authoring plan changed')
     for name,expected in plan['input_files_sha256'].items():
         if file_sha(name)!=expected:raise ValueError('Authoring input changed')
+    guard=ProviderGuard(root)
     rows=json.loads((root/'inputs.private.json').read_text()); settings=GeminiAVSettings.from_dict(json.loads((root/'teacher-config.json').read_text()))
     def one(row):
+        if guard.stopped:return
         sid=row['source_id'];dest=root/'results'/(sid+'.json')
         if file_sha(row['teacher_media_path'])!=row['teacher_media_sha256']:raise ValueError('Actual AV bytes changed')
         atomic_json(dest,{'source_id':sid,'status':'running','api_calls':1,'started_at':now(),'input_sha256':file_sha(root/'inputs'/sid/'input.private.json')})
@@ -212,6 +216,8 @@ def run(plan_dir, workers=3, max_sources=100):
                 {'text':json.dumps({'publisher_text':row['publisher_text'],'clip_duration_s':row['normalization']['normalized_duration_s']},ensure_ascii=False)}]}]
             response=GeminiAVRunner(settings).infer(contents,(root/'prompt.txt').read_text(),InferenceConfig(max_tokens=4096,temperature=.3))
             result['response']=response
+            failure=guard.observe(response)
+            if failure:result['provider_failure']=failure
             text=''.join(p.get('text','') for p in response['candidates'][0]['content']['parts'])
             snapshot=[{'role':'system','content':(root/'prompt.txt').read_text()}]+to_oai_messages(contents)+[{'role':'assistant','content':text}]
             result['generation_identity']=generation_identity(response,snapshot)
@@ -238,7 +244,7 @@ def summary(root):
         'failed_author_calls':sum(r['status']=='failed' for r in records),'uncertain_or_running_author_calls':sum(r['status']=='running' for r in records),
         'api_slots_charged':sum(r['api_calls'] for r in records),'pending_author_calls':plan['prepared_recordings']-len(records),
         'authored_question_candidates':sum(len(r.get('accepted_questions',r.get('questions',[]))) for r in records),'recordings_with_questions':sum(bool(r.get('accepted_questions',r.get('questions'))) for r in records),
-        'human_gold':0,'retained_trajectories':0}
+        'human_gold':0,'retained_trajectories':0,'provider_stopped':ProviderGuard(root).stopped}
     atomic_json(root/'summary.json',value);return value
 
 
@@ -251,16 +257,24 @@ def materialize(plan_dir, manifest_path, inventory_path, reserved_registry, out_
     seeds=json.loads(Path(manifest_path).read_text())['sources'];families=json.loads(Path(inventory_path).read_text())['candidate_families']
     reserved=[json.loads(l) for l in Path(reserved_registry).read_text().splitlines() if l]
     eligible,audit=select_sources(seeds,families,reserved,[],1000)
-    blocked=set(audit['excluded_reserved_family_sources'])
+    audit['invalid_duration_sources']=[s['source_id'] for s in seeds if s.get('status')=='candidate_unreviewed_av'
+        and (isinstance(s.get('duration_s'),bool) or not isinstance(s.get('duration_s'),(int,float))
+             or not math.isfinite(s['duration_s']) or s['duration_s']<=0)]
+    blocked=set(audit['excluded_reserved_family_sources']) | set(audit['invalid_duration_sources'])
     corpus_seeds=[s for s in seeds if s.get('status')=='candidate_unreviewed_av' and s['source_id'] not in blocked and s.get('description_page_html_path')]
     out=Path(out_dir).resolve();out.mkdir(parents=True,exist_ok=False);docs=[];sources=[];mapping={}
+    audit['native_parent_duration_receipts']=[]
     for s in corpus_seeds:
         if file_sha(s['asset_path'])!=s['sha256']:raise ValueError('Source changed before corpus freeze')
+        parent_handle=make_native_av_handle(s['asset_path'])
+        audit['native_parent_duration_receipts'].append({'source_id':s['source_id'],'asset_sha256':s['sha256'],
+            'manifest_duration_s':s['duration_s'],'native_duration_s':parent_handle['duration'],
+            'native_source_origin_s':parent_handle['source_origin_s']})
         md={k:html.unescape(v) for k,v in s['public_metadata'].items() if k in META_FIELDS};rights='publisher_declared:'+md.get('license','unknown')
         web=ingest_web_snapshot(s['description_page_html_path'],s['origin_url'],out/'web',md,rights,fetched_at=s['fetched_at'],
             snapshot_identity={'transport':'commons_api_parse_fragment','request_url':s['origin_url'],'publisher_revision':str(s['description_page_revision'])})
         av={'source_id':'src_'+s['sha256'][:24],'origin_url':s['origin_url'],'asset_path':s['asset_path'],'asset_sha256':s['sha256'],
-            'media_type':'audio_video','duration_s':s['duration_s'],'public_metadata':md,'rights_basis':rights,'redistribution_scope':'metadata_only'}
+            'media_type':'audio_video','duration_s':parent_handle['duration'],'public_metadata':md,'rights_basis':rights,'redistribution_scope':'metadata_only'}
         sources.extend([av,web]);mapping[s['source_id']]=av;docs.append(web_corpus_document(web))
         docs.append({k:av[k] for k in ('source_id','origin_url','asset_path','asset_sha256','media_type','duration_s','public_metadata')}|
             {'text':'\n'.join(k+': '+v for k,v in md.items()),'text_kind':'public_metadata'})

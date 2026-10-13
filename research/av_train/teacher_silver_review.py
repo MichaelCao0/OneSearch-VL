@@ -14,6 +14,7 @@ import os
 from pathlib import Path
 
 from research.av_train.question_authoring import parse_json_output
+from research.av_train.provider_guard import ProviderGuard
 from research.av_train.generation_receipts import generation_identity
 from research.av_train.native_sft import file_sha, validate_trajectory
 from research.av_train.teacher_rollouts import atomic_json, load_plan, now
@@ -73,7 +74,7 @@ def summarize(out):
     value={'attempted_reviews':len(records),'completed_reviews':sum(r['status']=='completed' for r in records),
         'failed_reviews':sum(r['status']=='failed' for r in records),'uncertain_or_running_reviews':sum(r['status']=='running' for r in records),
         'retained_silver_candidates':sum(r.get('success') is True for r in records),'api_slots_charged':sum(r['api_calls'] for r in records),
-        'human_verified':0,'benchmark_gold':0,'same_model_separate_invocation':True,'generation_queue_retention_updated':False}
+        'human_verified':0,'benchmark_gold':0,'same_model_separate_invocation':True,'generation_queue_retention_updated':False,'provider_stopped':ProviderGuard(out).stopped}
     atomic_json(out/'summary.json',value);return value
 
 
@@ -94,8 +95,10 @@ def review(plan_dir,out_dir,workers=3,max_candidates=256):
             or spec['prompt_sha256']!=file_sha(out/'prompt.txt') or spec['source_sha256']!=file_sha(__file__)
             or spec['max_candidates']!=max_candidates or spec['workers']!=workers):
         raise ValueError('Review source/reference/prompt/budget changed; use a new output version')
+    guard=ProviderGuard(out)
     settings=replace(GeminiAVSettings.from_dict(json.loads((plan_root/'teacher-config.json').read_text())),action_protocol='tags')
     def one(path):
+        if guard.stopped:return
         trace,trajectory_sha=load_completed_trajectory(path,plan_sha);cid=trace['case_id'];binding=bindings[cid];reference=refs[binding['task_id']]
         validate_trajectory(trace)
         if file_sha(binding['source_path'])!=binding['source_sha256']:raise ValueError('Reviewer AV bytes changed')
@@ -113,6 +116,8 @@ def review(plan_dir,out_dir,workers=3,max_candidates=256):
                 {'text':json.dumps(payload,ensure_ascii=False)}]}]
             response=GeminiAVRunner(settings).infer(contents,(out/'prompt.txt').read_text(),InferenceConfig(max_tokens=2048,temperature=0.))
             result['response']=response
+            failure=guard.observe(response)
+            if failure:result['provider_failure']=failure
             text=''.join(p.get('text','') for p in response['candidates'][0]['content']['parts'])
             snapshot=[{'role':'system','content':(out/'prompt.txt').read_text()}]+to_oai_messages(contents)+[{'role':'assistant','content':text}]
             result['reviewer_identity']=generation_identity(response,snapshot)

@@ -20,17 +20,22 @@ def group_recordings(rows):
     def root(x):
         while parents[x]!=x:x=parents[x]
         return x
+    keys={r['source_id']:(norm(r['title']),norm(r['creator']),origin_key(r['origin_url']),[int(x['dhash64'],16) for x in r['video_fingerprints']]) for r in rows}
     for i,a in enumerate(rows):
         for b in rows[i+1:]:
-            reasons=[];similarity=difflib.SequenceMatcher(None,norm(a['title']),norm(b['title'])).ratio()
+            reasons=[];similarity=None
+            at,ac,au,af=keys[a['source_id']];bt,bc,bu,bf=keys[b['source_id']]
             if a['asset_sha256']==b['asset_sha256']:reasons.append('same_asset_sha256')
-            if origin_key(a['origin_url'])==origin_key(b['origin_url']):reasons.append('same_public_page')
-            if norm(a['creator']) and norm(a['creator'])==norm(b['creator']) and similarity>=.62:reasons.append('same_creator_similar_title')
-            distance=None;af=a['video_fingerprints'];bf=b['video_fingerprints']
+            if au==bu:reasons.append('same_public_page')
+            if ac and ac==bc:
+                similarity=difflib.SequenceMatcher(None,at,bt).ratio()
+                if similarity>=.62:reasons.append('same_creator_similar_title')
+            distance=None
             if len(af)==len(bf)==4:
-                distance=sum((int(x['dhash64'],16)^int(y['dhash64'],16)).bit_count() for x,y in zip(af,bf))/4
+                distance=sum((x^y).bit_count() for x,y in zip(af,bf))/4
                 if distance<=8:reasons.append('aligned_thumbnail_similarity')
             if reasons:
+                if similarity is None:similarity=difflib.SequenceMatcher(None,at,bt).ratio()
                 pairs.append({'source_a':a['source_id'],'source_b':b['source_id'],'reasons':reasons,'title_similarity':similarity,
                     'mean_aligned_dhash_hamming':distance,'status':'candidate_family_requires_review'})
                 ra,rb=root(a['source_id']),root(b['source_id']);parents[max(ra,rb)]=min(ra,rb)
@@ -41,7 +46,7 @@ def group_recordings(rows):
     return pairs,groups
 
 
-def build_inventory(manifests,reserved_registries,out_dir,workers=4):
+def build_inventory(manifests,reserved_registries,out_dir,workers=4,*,cached_inventories=()):
     if not 1<=workers<=8:raise ValueError('Bounded CPU worker count required')
     paths=[Path(p).resolve() for p in manifests]+[Path(p).resolve() for p in reserved_registries]
     seeds={}
@@ -55,13 +60,19 @@ def build_inventory(manifests,reserved_registries,out_dir,workers=4):
                 seeds[s['source_id']]={'source_id':s['source_id'],'page_id':None,'asset_path':s['asset_path'],'sha256':s['asset_sha256'],
                     'duration_s':s['duration_s'],'origin_url':s['origin_url'],'public_metadata':s['public_metadata'],
                     'candidate_domain':'reserved_dev_test','reserved':True}
-    if not seeds or len(seeds)>2000:raise ValueError('One to 2000 usable inventory inputs required')
+    if not seeds or len(seeds)>10000:raise ValueError('One to 10000 usable inventory inputs required')
+    cached={}
+    for inventory in cached_inventories:
+        for row in json.loads(Path(inventory).read_text())['rows']:
+            if row.get('sha256_verified') is True and len(row.get('video_fingerprints',[]))==4 and not row.get('fingerprint_errors'):
+                cached[(row['asset_sha256'],row['duration_s'])]=row
     out=Path(out_dir).resolve();out.mkdir(parents=True,exist_ok=False);start=time.monotonic()
     def one(s):
         path=Path(s['asset_path']);sha=file_sha(path)
         if sha!=s['sha256']:raise ValueError('Inventory input hash differs from acquisition/reservation')
-        fps=[];errors=[]
-        for ratio in (.1,.35,.65,.9):
+        prior=cached.get((sha,s['duration_s']))
+        fps=list(prior['video_fingerprints']) if prior else [];errors=[]
+        for ratio in (() if prior else (.1,.35,.65,.9)):
             ss=max(0.,s['duration_s']*ratio)
             try:
                 raw=subprocess.check_output(['ffmpeg','-v','error','-threads','1','-ss',str(ss),'-i',str(path),'-map','0:v:0',
@@ -77,7 +88,7 @@ def build_inventory(manifests,reserved_registries,out_dir,workers=4):
             'title':md.get('title',''),'description':md.get('description',''),'creator':md.get('creator',''),
             'license':md.get('license',''),'origin_url':s['origin_url'],'domain':s['candidate_domain'].split('_')[0],
             'duration_s':s['duration_s'],'video_fingerprints':fps,'fingerprint_errors':errors,'reserved':s['reserved'],
-            'semantic_review':'pending','family_review':'pending'}
+            'semantic_review':'pending','family_review':'pending','fingerprints_from_verified_cache':bool(prior)}
     rows=[]
     with ThreadPoolExecutor(max_workers=workers) as pool:
         for f in as_completed([pool.submit(one,s) for s in seeds.values()]):
@@ -89,6 +100,8 @@ def build_inventory(manifests,reserved_registries,out_dir,workers=4):
         'exact_unique_asset_hashes':len({r['asset_sha256'] for r in rows}),'candidate_family_groups':len(groups),
         'multi_asset_candidate_families':sum(len(g['source_ids'])>1 for g in groups),'candidate_family_pairs':len(pairs),
         'fingerprint_error_sources':sum(bool(r['fingerprint_errors']) for r in rows),
+        'cached_fingerprint_records':sum(r['fingerprints_from_verified_cache'] for r in rows),
+        'cached_inventory_files_sha256':{str(Path(p).resolve()):file_sha(p) for p in cached_inventories},
         'sampled_video_fingerprints':sum(len(r['video_fingerprints']) for r in rows),'wall_seconds':time.monotonic()-start,
         'by_domain':{d:sum(r['domain']==d for r in rows) for d in sorted({r['domain'] for r in rows})},
         'independent_recordings_verified':False,'thumbnail_similarity_does_not_prove_same_recording':True,'human_gold':0}
