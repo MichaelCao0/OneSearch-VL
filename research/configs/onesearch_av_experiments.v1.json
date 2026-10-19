@@ -1,0 +1,186 @@
+{
+  "schema": "onesearch-av-three-axis-experiments.v1",
+  "created_at": "2026-10-16T09:10:43.231010+00:00",
+  "model": {
+    "id": "Qwen/Qwen2.5-Omni-7B",
+    "revision": "ae9e1690543ffd5c0221dc27f79834d0294cba00",
+    "entrypoint": "SFT/src/train.py",
+    "talker_excluded": true
+  },
+  "axis_a": {
+    "question": "Does complete search-trajectory supervision and data scale improve task success?",
+    "training_arms": [
+      {
+        "id": "full_500_trajectory",
+        "questions": 500,
+        "supervision": "trajectory",
+        "finetuning_type": "full",
+        "epochs": 2,
+        "effective_batch": 4,
+        "expected_updates": 250,
+        "learning_rate": 1e-05,
+        "freeze_av_towers_and_projectors": true,
+        "start_from_same_pinned_base": true
+      },
+      {
+        "id": "full_500_answer_only",
+        "questions": 500,
+        "supervision": "answer_only",
+        "finetuning_type": "full",
+        "epochs": 2,
+        "effective_batch": 4,
+        "expected_updates": 250,
+        "learning_rate": 1e-05,
+        "freeze_av_towers_and_projectors": true,
+        "start_from_same_pinned_base": true
+      },
+      {
+        "id": "full_2000_trajectory",
+        "questions": 2000,
+        "supervision": "trajectory",
+        "finetuning_type": "full",
+        "epochs": 2,
+        "effective_batch": 4,
+        "expected_updates": 1000,
+        "learning_rate": 1e-05,
+        "freeze_av_towers_and_projectors": true,
+        "start_from_same_pinned_base": true
+      },
+      {
+        "id": "full_2000_answer_only",
+        "questions": 2000,
+        "supervision": "answer_only",
+        "finetuning_type": "full",
+        "epochs": 2,
+        "effective_batch": 4,
+        "expected_updates": 1000,
+        "learning_rate": 1e-05,
+        "freeze_av_towers_and_projectors": true,
+        "start_from_same_pinned_base": true
+      }
+    ],
+    "baselines": [
+      "direct_base",
+      "dev_selected_prompted_search"
+    ],
+    "prompt_selection": {
+      "split": "dev_only",
+      "heldout_for_selection": false,
+      "required_protocol_probe": "Separate tool-protocol execution from AV clue-to-query ability",
+      "minimum_validity": "Report actual tool execution and final completion before treating prompted arm as an effective search baseline"
+    },
+    "comparison_policy": {
+      "same_questions_for_supervision_controls": true,
+      "clean500_nested_in_clean2000": true,
+      "primary_scaling": "same epochs and recipe; 2K has 4x planned updates",
+      "report_context_and_supervised_tokens": true,
+      "claim_compute_matched": false,
+      "historical_lora500_is_separate": true
+    },
+    "gpu_preflight": {
+      "world_size_candidate": 4,
+      "min_memory_gib_per_gpu_candidate": 80,
+      "deepspeed": "zero2",
+      "gradient_accumulation_for_candidate_world_size": 1,
+      "required": "actual AV full Thinker forward/backward and 3 optimizer updates; decoder change, AV freeze and checkpoint readback"
+    },
+    "metrics": [
+      "answer_success",
+      "supported_success",
+      "target_source_returned",
+      "effective_tool_calls",
+      "final_completion",
+      "supervised_tokens",
+      "optimizer_updates",
+      "gpu_hours"
+    ]
+  },
+  "axis_b": {
+    "question": "When do sound and visual context improve retrieval and task success?",
+    "inputs": [
+      "native_av",
+      "muted_video",
+      "audio_only",
+      "video_plus_asr"
+    ],
+    "modality_role_labels": [
+      "audio_primary",
+      "joint_av",
+      "visual_primary",
+      "speech_text_control"
+    ],
+    "research_operation_labels": [
+      "single_anchor_lookup",
+      "multi_hop_retrieval",
+      "knowledge_conditioned_count",
+      "multi_anchor_join",
+      "multi_anchor_arithmetic",
+      "multi_anchor_comparison"
+    ],
+    "input_contract": {
+      "all_turns": "Intervention also applies to every inspect_av return",
+      "muted_video": "No model-visible audio; preserve encoded video packets",
+      "audio_only": "Original audio without video frames or image/text captions derived from them",
+      "video_plus_asr": "Muted video and transcript from same interval; ASR model and transcript fixed for all compared policies"
+    },
+    "annotation_selection": "Do not select or relabel benchmark by student wins/losses",
+    "metrics": [
+      "paired_answer_success",
+      "paired_supported_success",
+      "target_source_returned",
+      "query_or_entity_change",
+      "tool_budget",
+      "family_bootstrap_interval"
+    ],
+    "formal_gold_requirements": [
+      "human fact and source verification",
+      "input interval and identity link",
+      "source-family separation",
+      "modality role annotation"
+    ],
+    "human_gold": 0
+  },
+  "axis_c": {
+    "question": "Which data construction and sampling choices improve data quality and learning?",
+    "construction_pilot": {
+      "paired_sources": 32,
+      "arms": [
+        "native_av_plus_publisher",
+        "publisher_text_only"
+      ],
+      "same_source_material": true,
+      "same_teacher_and_output_budget": true,
+      "same_fact_support_rules": true,
+      "max_fresh_calls_if_both_arms_needed": 64,
+      "reuse_policy": "Reuse successful AV-author receipt only with exact question/media/publisher binding; never replay failed or unknown calls",
+      "status": "input selection; model generation not launched"
+    },
+    "blind_quality_review": [
+      "actual input match",
+      "reasonable clue-to-entity search path",
+      "external information needed",
+      "answer support",
+      "distinct facts and operation coverage"
+    ],
+    "learning_controls": [
+      "natural_sample_500_trajectory",
+      "modality_stratified_500_trajectory"
+    ],
+    "sampling_budget": "Match question count and teacher identity where feasible; report and match supervised-token budget in the data-method comparison",
+    "role_labels": "Human labels or explicitly named automatic silver labels; never infer audio contribution from domain or student outcome",
+    "metrics": [
+      "accepted_questions_per_source",
+      "search_needed_rate",
+      "input_answer_support",
+      "audited_main_search_yield",
+      "downstream_task_success",
+      "supervised_tokens"
+    ]
+  },
+  "status": {
+    "new_model_api_calls": 0,
+    "new_gpu_jobs": 0,
+    "human_gold": 0,
+    "formal_training_not_launched": true
+  }
+}

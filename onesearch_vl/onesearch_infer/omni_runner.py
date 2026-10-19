@@ -191,6 +191,27 @@ def tensor_metadata(inputs):
     return result
 
 
+
+def audio_token_binding(processor, inputs):
+    """Require a token slot for every encoded audio feature before generation."""
+    ids = inputs["input_ids"]
+    audio_id = processor.tokenizer.convert_tokens_to_ids(processor.audio_token)
+    video_id = processor.tokenizer.convert_tokens_to_ids(processor.video_token)
+    actual = int((ids == audio_id).sum().item())
+    mask = inputs.get("feature_attention_mask")
+    if (mask is None) != (inputs.get("input_features") is None):
+        raise ValueError("Audio token/feature inputs require both features and their mask")
+    expected = 0
+    if mask is not None:
+        input_lengths = (mask.sum(-1) - 1) // 2 + 1
+        expected = int(((input_lengths - 2) // 2 + 1).sum().item())
+    if actual != expected:
+        raise ValueError(f"Audio token/feature length mismatch: tokens={actual}, features={expected}")
+    return {"audio_token_count": actual, "expected_audio_token_count": expected,
+            "video_token_count": int((ids == video_id).sum().item()),
+            "audio_token_binding_verified": True}
+
+
 class OmniRunner(BaseRunner):
     supports_audio_video = True
 
@@ -345,11 +366,15 @@ class OmniRunner(BaseRunner):
         text = self._processor.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
         inputs = self._processor(
             text=text, audio=audios or None, images=images or None, videos=videos or None,
-            return_tensors="pt", padding=True, use_audio_in_video=use_joint,
-            fps=sampled_fps[0] if sampled_fps else 2.0, do_sample_frames=False,
+            return_tensors="pt", padding=True,
             # The helper already applies each block's min/max pixels. The
             # processor's default resize would otherwise upscale bounded clips.
-            images_kwargs={"do_resize": False}, videos_kwargs={"do_resize": False})
+            images_kwargs={"do_resize": False},
+            # ProcessorMixin ignores flat video kwargs when this dict exists.
+            # Keep every video option together so AV token slots are expanded.
+            videos_kwargs={"do_resize": False, "use_audio_in_video": use_joint,
+                           "fps": sampled_fps[0] if sampled_fps else 2.0,
+                           "do_sample_frames": False})
         if videos:
             # 4.57.6 computes every grid from one scalar FPS. Retokenize its
             # original prompt using its official expander and per-video values;
@@ -383,6 +408,7 @@ class OmniRunner(BaseRunner):
             "use_audio_in_video": use_joint,
             "audio_video_mode": "separate_streams_mixed_history" if mixed else "joint_av" if use_joint else "visual_or_explicit_audio",
             "input_tensors": tensor_metadata(inputs), "prompt_tokens": int(inputs["input_ids"].shape[1]),
+            **audio_token_binding(self._processor, inputs),
         }
         return inputs
 
@@ -397,9 +423,21 @@ class OmniRunner(BaseRunner):
         inputs = move_inputs(inputs, device, dtype)
         prompt_tokens = int(inputs["input_ids"].shape[1])
         stop = action_stopping_criteria(self._processor.tokenizer, prompt_tokens)
+        # Omni pads its output head beyond registered tokenizer IDs. These
+        # rows have no text representation and must never be generated.
+        thinker = model.thinker if hasattr(model, "thinker") else model
+        if not hasattr(self, "_generation_suppressed_ids"):
+            output_vocab_size = int(thinker.get_output_embeddings().weight.shape[0])
+            known_ids = set(self._processor.tokenizer.get_vocab().values())
+            existing = thinker.generation_config.suppress_tokens or []
+            self._generation_suppressed_ids = sorted(set(existing) | (set(range(output_vocab_size)) - known_ids))
+            self._generation_vocab_size = output_vocab_size
         kwargs = {"use_audio_in_video": self._use_audio_in_video, "return_audio": False,
                   "thinker_max_new_tokens": cfg.max_tokens, "thinker_do_sample": cfg.temperature > 0,
-                  "thinker_stopping_criteria": stop}
+                  "thinker_stopping_criteria": stop,
+                  "thinker_suppress_tokens": self._generation_suppressed_ids}
+        self._last_metrics.update({"output_vocab_size": self._generation_vocab_size,
+                                   "generation_suppressed_token_ids": self._generation_suppressed_ids})
         if cfg.temperature > 0:
             kwargs["thinker_temperature"] = cfg.temperature
         started = time.monotonic()

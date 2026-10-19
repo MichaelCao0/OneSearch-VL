@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import time
 import sys
 
 from .native_sft import SCHEMA, digest, export_episodes, file_sha
@@ -133,22 +134,38 @@ def produce_batch(batch_dir, out_dir, teacher_config, prompt_file, model_manifes
             sliced = slice_batch(batch, chunk / 'batch', chosen)
             plan_dir = chunk / 'candidate-plan'
             manifest = prepare_plan(sliced, plan_dir, teacher_config, prompt_file, candidates_per_task=1,
-                shard_size=3, index_dir=batch / 'corpus', max_turns=8, max_new_tokens=4096, temperature=.2)
+                shard_size=1, index_dir=batch / 'corpus', max_turns=8, max_new_tokens=4096, temperature=.2)
             atomic_json(out / 'state.json', {'status': 'running', 'stage': 'rollout', 'active_chunk': chunk.name,
                 'selected_questions': len(chosen), 'cursor': cursor, 'planned_questions': len(tasks),
                 'target': target, 'pool': current, 'at_utc': now()})
+            timings = {}
+            stage_started = time.perf_counter()
             def worker(shard):
                 with (chunk / f"rollout-{shard['shard_id']:04d}.log").open('x') as log:
-                    p = subprocess.run([sys.executable, '-m', 'research.av_train.teacher_rollouts', 'run',
+                    module = 'research.av_train.teacher_telemetry' if os.environ.get('ONESEARCH_TEACHER_PROFILE_DIR') else 'research.av_train.teacher_rollouts'
+                    command = [sys.executable, '-m', module]
+                    if module.endswith('teacher_telemetry'): command.append('rollout')
+                    p = subprocess.run(command + ['run',
                         '--plan-dir', str(plan_dir), '--shard-id', str(shard['shard_id']),
-                        '--max-candidates', '3', '--max-api-calls', '24'], cwd=ROOT, stdout=log, stderr=subprocess.STDOUT)
+                        '--max-candidates', '1', '--max-api-calls', '8'], cwd=ROOT, stdout=log, stderr=subprocess.STDOUT)
                 return {'shard_id': shard['shard_id'], 'returncode': p.returncode}
             with ThreadPoolExecutor(max_workers=workers) as pool:
                 outcomes = [f.result() for f in as_completed([pool.submit(worker, s) for s in manifest['shards']])]
+            timings['rollout_s'] = time.perf_counter() - stage_started
+            atomic_json(chunk / 'performance.json', timings)
             atomic_json(chunk / 'rollout-summary.json', {'summary': summarize_plan(plan_dir), 'workers': outcomes})
             if any(r['returncode'] for r in outcomes) or guard.stopped or ProviderGuard(plan_dir).stopped:
                 raise RuntimeError('Teacher rollout stopped; preserve attempts and pending work')
-            verdict = review(plan_dir, chunk / 'silver-review', workers=workers, max_candidates=len(chosen))
+            stage_started = time.perf_counter()
+            previous_stage = os.environ.get('ONESEARCH_TEACHER_PROFILE_STAGE')
+            os.environ['ONESEARCH_TEACHER_PROFILE_STAGE'] = 'review'
+            try:
+                verdict = review(plan_dir, chunk / 'silver-review', workers=workers, max_candidates=len(chosen))
+            finally:
+                if previous_stage is None: os.environ.pop('ONESEARCH_TEACHER_PROFILE_STAGE', None)
+                else: os.environ['ONESEARCH_TEACHER_PROFILE_STAGE'] = previous_stage
+                timings['review_s'] = time.perf_counter() - stage_started
+                atomic_json(chunk / 'performance.json', timings)
             if guard.stopped or verdict.get('provider_stopped'):
                 raise RuntimeError('Teacher review stopped; preserve all attempts')
             exported = {'retained_count': 0}
@@ -160,11 +177,14 @@ def produce_batch(batch_dir, out_dir, teacher_config, prompt_file, model_manifes
                     atomic_json(out / 'state.json', {'status': 'running', 'stage': 'original_trainer_cpu_audit',
                         'active_chunk': chunk.name, 'pool': verified_pool(exports + [data]), 'target': target, 'at_utc': now()})
                     env = dict(os.environ, OMP_NUM_THREADS='2', OPENBLAS_NUM_THREADS='2', MKL_NUM_THREADS='2')
+                    stage_started = time.perf_counter()
                     with (chunk / 'cpu-audit.log').open('x') as log:
                         p = subprocess.run(['pixi', 'run', '--locked', '--manifest-path', str(ROOT / 'runtime/sft-gpu/pixi.toml'),
                             'python', '-m', 'research.av_train.native_sft', 'audit', '--dataset-dir', str(data),
                             '--model-manifest', str(model_manifest), '--out-dir', str(chunk / 'silver-cpu-audit')],
                             cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT)
+                    timings['cpu_audit_s'] = time.perf_counter() - stage_started
+                    atomic_json(chunk / 'performance.json', timings)
                     if p.returncode:
                         raise RuntimeError('Original trainer CPU audit failed; do not count these rows toward target')
                     exports.append(data)

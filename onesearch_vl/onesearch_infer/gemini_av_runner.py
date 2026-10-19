@@ -184,7 +184,10 @@ class GeminiAVRunner(BaseRunner):
         except requests.RequestException as exc:
             return _empty_response(self.model, f"Native teacher transport failed ({type(exc).__name__}); response unavailable")
         if response.status_code != 200:
-            return _empty_response(self.model, f"Native teacher HTTP {response.status_code}; response body withheld")
+            from .teacher_errors import summarize_http_error
+            failed = _empty_response(self.model, f"Native teacher HTTP {response.status_code}; response body withheld")
+            failed.setdefault("raw_response", {})["provider_error"] = summarize_http_error(response.status_code, response.content)
+            return failed
         try:
             value = response.json()
             candidate = value["candidates"][0]

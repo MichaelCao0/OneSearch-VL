@@ -25,6 +25,12 @@ def video(path, audio=True, fps=2.0):
 class CharacterTokenizer:
     init_kwargs = {}
 
+    def get_vocab(self):
+        return {chr(i): i for i in range(256)}
+
+    def convert_tokens_to_ids(self, token):
+        return ord(token)
+
     def encode(self, text, **kwargs):
         return [ord(char) for char in text]
 
@@ -39,6 +45,8 @@ class CharacterTokenizer:
 class RecordingProcessor:
     def __init__(self):
         self.tokenizer = CharacterTokenizer()
+        self.audio_token = "\x01"
+        self.video_token = "\x02"
         self.video_processor = SimpleNamespace(temporal_patch_size=2)
         self.received = []
         self.expanded_seconds = None
@@ -51,7 +59,8 @@ class RecordingProcessor:
 
     def __call__(self, **kwargs):
         self.received.append(kwargs)
-        result = self.tokenizer([kwargs["text"]])
+        audio_slots = 25 * len(kwargs["audio"] or [])
+        result = self.tokenizer([self.audio_token * audio_slots + kwargs["text"]])
         if kwargs["audio"]:
             result["input_features"] = torch.full((len(kwargs["audio"]), 128, 100), 0.25)
             result["feature_attention_mask"] = torch.ones((len(kwargs["audio"]), 100), dtype=torch.int64)
@@ -67,7 +76,8 @@ class RecordingProcessor:
                                          video_grid_thw, video_second_per_grid,
                                          use_audio_in_video, position_id_per_seconds, seconds_per_chunk):
         self.expanded_seconds = list(video_second_per_grid)
-        return text
+        audio_slots = sum(int(value) for value in audio_lengths)
+        return [self.audio_token * audio_slots + text[0]]
 
     def batch_decode(self, ids, **kwargs):
         return [self.tokenizer.decode(ids[0])]
@@ -78,7 +88,9 @@ class RecordingModel:
         self.processor = processor
         self.weight = torch.zeros((1, 1), dtype=torch.bfloat16)
         self.calls = []
-        self.thinker = SimpleNamespace(get_input_embeddings=lambda: SimpleNamespace(weight=self.weight))
+        self.thinker = SimpleNamespace(get_input_embeddings=lambda: SimpleNamespace(weight=self.weight),
+                                       get_output_embeddings=lambda: SimpleNamespace(weight=torch.zeros(256, 1)),
+                                       generation_config=SimpleNamespace(suppress_tokens=None))
 
     def generate(self, **kwargs):
         self.calls.append(kwargs)
@@ -177,8 +189,8 @@ class NativeOmniTests(unittest.TestCase):
         self.assertEqual(inputs["input_features"].shape[0], 2)
         self.assertEqual(inputs["video_grid_thw"].shape[0], 2)
         self.assertEqual(inputs["image_grid_thw"].shape[0], 1)
-        self.assertEqual(processor.received[0]["fps"], 2.0)
-        self.assertTrue(processor.received[0]["use_audio_in_video"])
+        self.assertEqual(processor.received[0]["videos_kwargs"]["fps"], 2.0)
+        self.assertTrue(processor.received[0]["videos_kwargs"]["use_audio_in_video"])
         self.assertFalse(processor.received[0]["videos_kwargs"]["do_resize"])
         self.assertFalse(processor.received[0]["images_kwargs"]["do_resize"])
         self.assertEqual(processor.expanded_seconds, [1.0, 2/1.7])
@@ -192,7 +204,7 @@ class NativeOmniTests(unittest.TestCase):
         inputs = runner.prepare_inputs([{"parts": [video("/silent", audio=False)]}])
         self.assertNotIn("input_features", inputs)
         self.assertIsNone(processor.received[0]["audio"])
-        self.assertFalse(processor.received[0]["use_audio_in_video"])
+        self.assertFalse(processor.received[0]["videos_kwargs"]["use_audio_in_video"])
         self.assertEqual(runner.last_metrics["audio_count"], 0)
         self.assertEqual(runner.last_metrics["video_has_audio"], [False])
 
@@ -203,7 +215,7 @@ class NativeOmniTests(unittest.TestCase):
         self.assertEqual(inputs["video_grid_thw"].shape[0], 2)
         self.assertEqual([b["type"] for b in processor.messages[0]["content"]], ["audio", "video", "video"])
         self.assertEqual([flag for block, flag in calls], [True, False])
-        self.assertFalse(processor.received[0]["use_audio_in_video"])
+        self.assertFalse(processor.received[0]["videos_kwargs"]["use_audio_in_video"])
         self.assertEqual(runner.last_metrics["audio_video_mode"], "separate_streams_mixed_history")
 
     def test_generation_receives_mm_tensors_and_stops_at_one_complete_action(self):

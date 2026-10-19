@@ -1,0 +1,211 @@
+{
+  "schema": "onesearch-av-benchmark-design.v1",
+  "status": "development_candidate",
+  "frozen_for_test": false,
+  "task": "anonymous native audio-video clue -> tool search -> externally supported factual answer",
+  "design_document": "docs/research/OneSearch-AV-Paper-Dossier-v2-2026-10-15.md",
+  "targets": {
+    "sft_train_questions": 20000,
+    "train_validation_questions": 500,
+    "benchmark_dev_questions": 200,
+    "benchmark_test_questions": 1000,
+    "next_train_pilot": 2000,
+    "benchmark_construction_pilot": 100
+  },
+  "sampling": {
+    "content_domains": {
+      "music_performance": 0.3,
+      "sports_competition": 0.3,
+      "live_activity": 0.2,
+      "other": 0.2
+    },
+    "modality_role_targets": {
+      "joint": 0.4,
+      "audio_primary": 0.2,
+      "visual_primary": 0.3,
+      "speech_text_primary": 0.1
+    },
+    "labels": "annotate actual content and task-specific modality role; acquisition query is a sampling label",
+    "quota_calibration": "use construction pilot before test freeze; never use model outcomes to choose test questions"
+  },
+  "construction": {
+    "training": [
+      "acquire real AV and publisher facts",
+      "group recording families",
+      "reserve benchmark sources before training",
+      "native AV-conditioned authoring",
+      "anonymous tool-executed teacher search",
+      "separate silver factual review",
+      "paired trajectory/answer-only export",
+      "original trainer CPU media and label audit",
+      "immutable data freeze"
+    ],
+    "benchmark": [
+      "pre-reserved recording families",
+      "native AV-conditioned candidate authoring",
+      "playable AV/muted/audio/context review",
+      "two independent human reviews with adjudication",
+      "fact and source/interval binding",
+      "exclude actual training observation URLs/media and recording families",
+      "freeze dev/test and reference versions"
+    ]
+  },
+  "model_panel": [
+    {
+      "id": "B0",
+      "condition": "direct_qa",
+      "model_id": "Qwen/Qwen2.5-Omni-7B",
+      "revision": "ae9e1690543ffd5c0221dc27f79834d0294cba00",
+      "search_tools": false,
+      "stage": "planned_aligned_evaluation"
+    },
+    {
+      "id": "B1",
+      "condition": "prompted_search",
+      "model_id": "Qwen/Qwen2.5-Omni-7B",
+      "revision": "ae9e1690543ffd5c0221dc27f79834d0294cba00",
+      "search_tools": true,
+      "prompt_selection_split": "dev_only",
+      "stage": "strong_prompt_control_pending"
+    },
+    {
+      "id": "B2",
+      "condition": "same_question_answer_only_sft",
+      "base_model_id": "Qwen/Qwen2.5-Omni-7B",
+      "search_tools": true,
+      "pilot_questions": 500,
+      "stage": "frozen_data_cpu_preflight_passed_training_pending"
+    },
+    {
+      "id": "B3",
+      "condition": "trajectory_sft",
+      "base_model_id": "Qwen/Qwen2.5-Omni-7B",
+      "search_tools": true,
+      "pilot_questions": 500,
+      "stage": "lora_pilot_trained_and_silver_evaluated",
+      "main_recipe": "full_thinker_sft_pending_gpu_smoke"
+    },
+    {
+      "id": "B4",
+      "condition": "trajectory_plus_validated_data_strategy",
+      "base_model_id": "Qwen/Qwen2.5-Omni-7B",
+      "search_tools": true,
+      "stage": "planned_controlled_ablation"
+    },
+    {
+      "id": "B5",
+      "condition": "official_visual_agent",
+      "model_id": "OneSearch-VL/OneSearch-VL-8B",
+      "search_tools": true,
+      "modality": "muted_video",
+      "model_id_source": "repository README.md official model link",
+      "stage": "matched_environment_evaluation_pending"
+    },
+    {
+      "id": "B6",
+      "condition": "video_plus_asr_search",
+      "base_model_id": "Qwen/Qwen2.5-Omni-7B",
+      "search_tools": true,
+      "stage": "asr_backend_and_cost_control_pending"
+    },
+    {
+      "id": "B7",
+      "condition": "closed_native_av_search_reference",
+      "model_id": "gemini-3.1-pro",
+      "search_tools": true,
+      "stage": "same_tool_evaluation_pending",
+      "teacher_overlap": true,
+      "interpretation": "teacher-family capability reference, not independent judge validation"
+    }
+  ],
+  "matched_inference": {
+    "tools": [
+      "text_search",
+      "visit_webpage",
+      "inspect_av"
+    ],
+    "retrieval": "same frozen corpus identity for every matched comparison",
+    "prompt": "same dev-selected prompt across base and SFT; train-only demonstrations",
+    "current_pilot_budget": {
+      "max_turns": 8,
+      "max_output_tokens_per_turn": 512,
+      "temperature": 0
+    },
+    "formal_budget": "select on dev and freeze before test",
+    "prompt_tuning_heldout_access": false
+  },
+  "metrics": [
+    {
+      "name": "task_success",
+      "role": "primary",
+      "definition": "complete legal final within budget; all required facts correct and no material contradiction",
+      "current_pilot": "implemented silver outcome",
+      "formal": "human-calibrated rubric"
+    },
+    {
+      "name": "field_accuracy",
+      "role": "diagnostic",
+      "definition": "correct requested fields / total requested fields"
+    },
+    {
+      "name": "evidence_supported_success",
+      "role": "secondary",
+      "definition": "task success plus factual claims supported by actor-seen source observations",
+      "current_pilot": "publisher-reference supported_success proxy only",
+      "formal": "claim-to-actual-observation scoring pending"
+    },
+    {
+      "name": "source_retrieval",
+      "role": "diagnostic",
+      "definition": "valid reference/alternative evidence returned by executed tool; report read separately",
+      "current_pilot": "exact target/support URL line hits from saved observations"
+    },
+    {
+      "name": "modality_effect",
+      "role": "analysis",
+      "definition": "paired native AV/muted/audio-only/video+ASR changes, separated by annotated task modality"
+    },
+    {
+      "name": "cost",
+      "role": "secondary",
+      "fields": [
+        "tool_calls",
+        "repeated_calls",
+        "media_seconds",
+        "input_tokens",
+        "output_tokens",
+        "wall_seconds",
+        "GPU_hours",
+        "API_usage_cost"
+      ]
+    }
+  ],
+  "reporting": {
+    "uncertainty": "paired recording-family bootstrap; unknown judge outcomes reported separately with completion bounds",
+    "failure_stages": [
+      "clue_recognition",
+      "query",
+      "source_selection",
+      "media_inspection",
+      "fact_extraction",
+      "final_completion"
+    ],
+    "scale_points": [
+      500,
+      2000,
+      5000,
+      10000,
+      20000
+    ],
+    "main_training_seeds_target": 3
+  },
+  "review_import": {
+    "entrypoint": "research.av_data.review_decisions",
+    "browser_schema": "av-searchqa-authoring-review-draft.v2",
+    "consensus_is_formal_gold": false,
+    "outputs": [
+      "review-records.private.jsonl",
+      "summary.json"
+    ]
+  }
+}

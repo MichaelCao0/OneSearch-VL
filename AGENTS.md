@@ -2,7 +2,7 @@
 
 ## 工作位置与环境
 
-用户明确要求：后续开发、环境和实验都在用户当前指定的 Coder workspace；2026-10-10 最新指定为 `coder ssh 3`（替代此前的 `coder ssh 2`）；主项目 `/home/jovyan/OneSearch-VL`，环境由 Pixi 管理。不要在 macOS 或其他 workspace 开发第二份主代码。
+用户明确要求：后续开发、环境和实验都在用户当前指定的 Coder workspace；2026-10-19 最新指定为 `coder ssh 4`（替代此前的 `coder ssh 3` / `coder ssh 5`）；GPU 训练与评测继续通过项目 kjob launcher 提交；主项目 `/home/jovyan/OneSearch-VL`，环境由 Pixi 管理。不要在 macOS 或其他 workspace 开发第二份主代码。
 
 - origin：`https://github.com/MichaelCao0/OneSearch-VL.git`。
 - 官方基线 Git SHA：`0b7b01ed4872aaccd9af0f6f3d23a81814cf55bd`。
@@ -44,3 +44,24 @@
 - ordinary evaluator 仅检查最终答案，不能替代 evidence correctness / GCR。
 - 发布 launcher 的 RLOO 和 SFT LR 与论文有差异，训练成功不自动等于原论文 recipe 复现。
 - 2026-10-10 用户明确授权将本轮代码、环境 lock、测试和研究文档 commit/push 到自己的 fork 的 `research/av-deepresearch` 分支。后续公共动作按当次用户授权执行；PR、merge、原始数据/权重和私有 gold 发布仍须明确授权。
+
+## 2026-10-15 投稿主线与持续记录
+
+主计划见 docs/research/OneSearch-AV-Paper-Master-Plan-v5-2026-10-15.md：follow OneSearch-VL，以 Qwen2.5-Omni-7B 原生 AV 基座和原 agent loop/SFT/src/train.py 做搜索轨迹 SFT。完整交付规划为 20K 不同 train 问题、500 train-validation、200 benchmark dev + 1K test；不是已有完成量。2K 是 pilot。数据生产直接 CPU 后台，GPU 训练/评测沿已验证 launcher 执行。每次数据 freeze/训练/评测后追加版本化研究 ledger 与实际计数、recipe、tokens/成本、逐题语义结果，更新 docs/research/README.md；保留旧证据。先补充分调好的 prompted base 与同题 answer-only，音频正负结果均如实报告。
+
+
+## 2026-10-19 音频输入与 checkpoint 保留约定
+
+原生音频必须验证 audio tokens 与编码后的音频长度匹配；仅有 input_features 或 audio_count 不足。OmniRunner 在生成前执行 audio_token_binding，并记录实际 token 数。
+
+旧 OmniRunner 混用 flat use_audio_in_video/fps/do_sample_frames 与 videos_kwargs，pinned ProcessorMixin 因此忽略 flat video 选项。真实 12 秒原声案例解出音频特征但仅有 0 个 audio tokens；修复后为 300 个，视频均为 1,440 tokens。已增加 token/feature 长度一致性检查，22 项测试通过。旧音频消融保留原始产物并标记失效，不能用于音频因果解释；异 FPS 多轮另有显式展开，不能概括为所有历史原声均没有音频。
+
+按用户要求删除两份旧 smoke：av-full-thinker-smoke-20261016-v1/checkpoint、av-full-thinker-2k-resource-20261018-v1/checkpoint，共 275.008 GiB 文件载荷。删除后这两份 smoke 原训练状态不可恢复；配置、状态小文件、清单和验证记录归档在 research/runs/av-checkpoint-cleanup-20261019-v1。四组正式推理模型及续训状态、基座和数据保留。共享盘目录 du 与逐文件统计不同，空间变化可能异步，删除载荷与全盘读数分别报告。
+
+后续 checkpoint 收尾按实际文件字节、活动任务引用与明确路径清单执行，优先清理已验收且不再使用的资源 smoke。正式对照模型按论文比较需要保留；训练使用 save_total_limit=1，清理 optimizer/scheduler/RNG 状态必须记录续训能力变化。
+
+## 2026-10-19 在线构题和媒体内容验证
+
+用户已授权构题与 teacher 解题都用真实 Search API，先做 64 条，质量检查后扩到 500 条训练对照。新入口为 research/av_train/online_data_engine.py，当前仍为实验实现，新增合格组合题 0 条。具体诊断见 docs/research/OneSearch-AV-Online-Compositional-Engine-and-Transport-Diagnostic-2026-10-19.md。
+
+本次 OpenAI 兼容 video_url 路径对机械乐器、马拉松和钟楼视频产生了与实际帧不符的描述，av-online-compositional64-20261019-v4 已隔离。该 provider/model/endpoint 组合在入口中拒绝执行。后续优先验证原生 generateContent 的实际声画内容；不得将 HTTP 200、媒体字节 hash 或模型目录当作内容理解证明。已失败和未知请求保留，不重放。

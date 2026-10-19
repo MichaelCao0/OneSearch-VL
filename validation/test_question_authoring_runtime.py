@@ -6,7 +6,7 @@ from unittest.mock import patch
 from teacher_http_fixtures import fixture_server,reply
 from research.av_train import question_authoring as q
 class AuthoringRuntimeTests(unittest.TestCase):
- def exercise(self,success,extra_source=False):
+ def exercise(self,success,extra_source=False,split=None):
   with tempfile.TemporaryDirectory() as folder:
    root=Path(folder);media=root/'original.mp4'
    subprocess.run(['ffmpeg','-v','error','-f','lavfi','-i','color=blue:s=96x64:r=4:d=1','-f','lavfi','-i','sine=frequency=300:duration=1','-c:v','libx264','-pix_fmt','yuv420p','-c:a','aac','-shortest',str(media)],check=True,capture_output=True)
@@ -32,8 +32,11 @@ class AuthoringRuntimeTests(unittest.TestCase):
     self.assertEqual(len(received),1);self.assertEqual(result,again);self.assertEqual(result['api_slots_charged'],1)
     self.assertIn('inlineData',received[0]['payload']['contents'][0]['parts'][0])
     if success:
-     batch=root/'batch';report=q.materialize(plan,paths['manifest'],paths['inventory'],reserved,batch)
+     batch=root/'batch';report=q.materialize(plan,paths['manifest'],paths['inventory'],reserved,batch,**({'split':split} if split else {}))
      self.assertEqual(report['tasks'],1)
+     expected=split or 'train';tasks=[json.loads(l) for l in (batch/'tasks-public.jsonl').read_text().splitlines()];scope=json.loads((batch/'scope.json').read_text())
+     self.assertEqual(scope['split'],expected);self.assertEqual(tasks[0]['split'],expected)
+     self.assertFalse(json.loads((batch/'answer-candidates.private.jsonl').read_text().splitlines()[0])['benchmark_gold'])
      self.assertEqual(report['indexed_av_sources'],1)
      audit=json.loads((batch/'source-family-audit.private.json').read_text());receipt=audit['native_parent_duration_receipts'][0]
      self.assertEqual(receipt['manifest_duration_s'],.998)
@@ -49,6 +52,7 @@ class AuthoringRuntimeTests(unittest.TestCase):
       self.assertEqual(result['pending_author_calls'],1)
       self.assertTrue((plan/'provider-stop.json').exists())
  def test_native_media_receipt_can_materialize_private_reference_without_actor_leak(self):self.exercise(True)
+ def test_benchmark_dev_remains_separate_from_train_and_pending_gold(self):self.exercise(True,split='dev')
  def test_failed_http_attempt_is_not_replayed_on_resume(self):self.exercise(False)
  def test_provider_failure_leaves_remaining_sources_unattempted(self):self.exercise(False,extra_source=True)
 if __name__=='__main__':unittest.main()

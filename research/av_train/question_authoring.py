@@ -248,7 +248,9 @@ def summary(root):
     atomic_json(root/'summary.json',value);return value
 
 
-def materialize(plan_dir, manifest_path, inventory_path, reserved_registry, out_dir, source_ids=None):
+def materialize(plan_dir, manifest_path, inventory_path, reserved_registry, out_dir, source_ids=None, *, split="train"):
+    if split not in {"train", "train_validation", "dev", "test"}:
+        raise ValueError("Explicit train/development/test split required")
     root=Path(plan_dir).resolve();plan=json.loads((root/'plan.json').read_text())
     if file_sha(root/'inputs.private.json')!=plan['inputs_sha256']:raise ValueError('Frozen authoring inputs changed')
     for supplied in (manifest_path,inventory_path,reserved_registry):
@@ -279,7 +281,7 @@ def materialize(plan_dir, manifest_path, inventory_path, reserved_registry, out_
         docs.append({k:av[k] for k in ('source_id','origin_url','asset_path','asset_sha256','media_type','duration_s','public_metadata')}|
             {'text':'\n'.join(k+': '+v for k,v in md.items()),'text_kind':'public_metadata'})
     corpus_id='av-author-'+hashlib.sha256((str(out)+file_sha(root/'inputs.private.json')).encode()).hexdigest()[:20]
-    manifest=build_corpus(docs,out/'corpus',corpus_id,'train');inputs={s['source_id']:s for s in json.loads((root/'inputs.private.json').read_text())}
+    manifest=build_corpus(docs,out/'corpus',corpus_id,split);inputs={s['source_id']:s for s in json.loads((root/'inputs.private.json').read_text())}
     tasks=[];bindings=[];cases=[];lineage=[];rejections=[]
     for p in sorted((root/'results').glob('*.json')):
         record=json.loads(p.read_text());sid=record['source_id']
@@ -299,7 +301,7 @@ def materialize(plan_dir, manifest_path, inventory_path, reserved_registry, out_
             cases.append(case);cid='src_'+secrets.token_hex(12)
             source={'source_id':'src_'+row['teacher_media_sha256'][:24],'media_type':'audio_video','has_audio':True,
                 'duration_s':row['normalization']['normalized_duration_s'],'asset_path':row['teacher_media_path'],'asset_sha256':row['teacher_media_sha256']}
-            tasks.append(actor_task(case,cid,corpus_id,'train'));bindings.append({'clue_id':cid,'source':source})
+            tasks.append(actor_task(case,cid,corpus_id,split));bindings.append({'clue_id':cid,'source':source})
             lineage.append({'task_id':tid,'acquisition_source_id':sid,'candidate_family_id':row['candidate_family_id'],
                 'parent_source_id':case['target_source_id'],'interval':row['interval'],'author_result_sha256':file_sha(p),
                 'authoring_plan_sha256':file_sha(root/'plan.json'),'native_crop':row['native_crop'],'normalization':row['normalization'],
@@ -310,7 +312,7 @@ def materialize(plan_dir, manifest_path, inventory_path, reserved_registry, out_
     write_json(out/'scope.json',{k:manifest[k] for k in ('corpus_id','split','source_ids')});write_json(out/'clue-bindings.private.json',bindings)
     write_json(out/'clue-lineage.private.json',lineage);write_json(out/'source-family-audit.private.json',audit)
     write_json(out/'authoring-rejections.private.json',rejections)
-    report={'filtered_question_candidates':len(rejections),'tasks':len(tasks),'recording_candidates':len({r['acquisition_source_id'] for r in lineage}),
+    report={'split':split,'filtered_question_candidates':len(rejections),'tasks':len(tasks),'recording_candidates':len({r['acquisition_source_id'] for r in lineage}),
         'candidate_families':len({r['candidate_family_id'] for r in lineage}),'indexed_av_sources':len(corpus_seeds),'human_gold':0,
         'scenarios':{s:sum(c['scenario']==s for c in cases) for s in sorted({c['scenario'] for c in cases})},
         'audio_necessity':'teacher grounded candidate; ablations and human verification pending','source_disjoint_formal_evaluation':False}
@@ -324,12 +326,12 @@ def main():
     prepare_parser.add_argument('--limit',type=int,default=100)
     run_parser=sub.add_parser('run');run_parser.add_argument('--plan-dir',required=True);run_parser.add_argument('--workers',type=int,default=3);run_parser.add_argument('--max-sources',type=int,default=100)
     status=sub.add_parser('status');status.add_argument('--plan-dir',required=True)
-    mat=sub.add_parser('materialize');mat.add_argument('--source-id',action='append')
+    mat=sub.add_parser('materialize');mat.add_argument('--source-id',action='append');mat.add_argument('--split',choices=['train','train_validation','dev','test'],default='train')
     for name in ['plan-dir','manifest','inventory','reserved-registry','out-dir']:mat.add_argument('--'+name,required=True)
     a=p.parse_args()
     if a.command=='prepare':value=prepare(a.manifest,a.inventory,a.reserved_registry,a.used_drafts,a.out_dir,a.teacher_config,a.limit)
     elif a.command=='run':value=run(a.plan_dir,a.workers,a.max_sources)
-    elif a.command=='materialize':value=materialize(a.plan_dir,a.manifest,a.inventory,a.reserved_registry,a.out_dir,a.source_id)
+    elif a.command=='materialize':value=materialize(a.plan_dir,a.manifest,a.inventory,a.reserved_registry,a.out_dir,a.source_id,split=a.split)
     else:value=summary(a.plan_dir)
     print(json.dumps(value,ensure_ascii=False,indent=2))
 if __name__=='__main__':main()
